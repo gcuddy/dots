@@ -9,7 +9,9 @@ builds everything on that image.
     - echo: history does not crawl, it jumps
 
 A ==Black Swan==^[capitalized throughout — it's a term of art, not a bird] is
-defined by rarity, extreme impact, and retrospective predictability.
+defined by rarity, extreme impact, and retrospective predictability. He
+credits ==Mandelbrot==^[see [[Mandelbrot]] — wikilinks inside quick notes are fine]
+repeatedly.
 
 ## Chapter 3
 
@@ -17,6 +19,7 @@ He calls it the ==narrative fallacy==[^m-a41x] here, and ties the
 ==ludic fallacy==[^m-a41x] to it two chapters later.
 
 [^m-a41x]: gus (2026-08-31): One error in two costumes — read together. #m/q #m/multi
+
     - echo: narrative fallacy
     - echo: ludic fallacy
     - claude (2026-09-01): He concedes the overlap in the postscript essay. #m/ref

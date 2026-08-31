@@ -42,3 +42,26 @@ An undeclared ==shared label==[^m-t10] and again ==shared label==[^m-t10] trap.
 A ==sequential label==[^m-1] transient.
 
 [^m-1]: gus: relabel me on save. #m/todo
+
+A ==near-miss label==[^m-Q4] trap.
+
+[^m-Q4]: gus: uppercase — invisible to the whole toolchain unless linted.
+
+A ==link-title shape==[^m-t11] trap.
+
+[^m-t11]: nice (agreed)
+
+A ==deep reply==[^m-t12] trap.
+
+[^m-t12]: gus: head entry is fine here #m/q
+     - claude: five-space reply — renders inside the footnote, non-canonical
+    * gus: star bullet — captured, linted
+
+A ==lazy join==[^m-t13] trap.
+
+[^m-t13]: gus: this note starts fine
+but this unindented line gets absorbed into the footnote by renderers.
+
+A ==punctuation gap==.[^m-t14] demo (info-level, accepted form).
+
+[^m-t14]: gus: bound through the period, normalize to tight. #m/q

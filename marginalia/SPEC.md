@@ -2,7 +2,7 @@
 
 **A plain-text convention for annotating highlights in Obsidian-flavored Markdown.**
 
-Version 1.0-rc1 · 2026-08-31 · License: CC0
+Version 1.0-rc2 · 2026-08-31 · License: CC0
 
 ```markdown
 The ==map is not the territory==[^m-7f3k] as Korzybski said.
@@ -49,9 +49,9 @@ demonstrated the failure it prevents; the receipts are in §13 and Appendix D.
    the spec says so plainly instead of pretending.
 5. **Humans first, machines close second.** Metadata reads as dialogue
    (`gus (2026-08-31): too broad #m/q`), never as JSON or attribute soup. But
-   the grammar is regular enough that a ~300-line dependency-free parser
-   (shipped with this spec) extracts everything, and AI agents can read and
-   write it with file access alone.
+   the grammar is regular enough that a dependency-free reference parser
+   (shipped with this spec, with a regression suite) extracts everything, and
+   AI agents can read and write it with file access alone.
 6. **Thumb-typeable.** There is a one-gesture mobile capture form (§4) with a
    defined promotion path.
 
@@ -84,15 +84,16 @@ Rules (all inherited from how markdown actually parses, verified):
 
 - **H1.** A highlight MUST NOT cross a blank line. No parser supports it
   (verified across six renderers). For multi-paragraph annotation targets, see
-  multi-segment highlights (§7.4) or point annotations (§7.3).
+  multi-segment highlights (§7.3) or point annotations (§7.2).
 - **H2.** A highlight MUST NOT partially overlap another inline span
   (the Fletcher Penney / PyMdown rule: `*italic ==both* wrong==` is
   undefined behavior everywhere). Fully nested is fine: `**==bold mark==**`
   and `==a **bold** word==` both verified.
 - **H3.** Write highlights tight: no whitespace just inside the fences.
-  Obsidian's parser is laxer than everyone else's — `==text ==` renders as a
-  highlight in Obsidian *only* and leaks literal `==` debris in every other
-  renderer (verified). Normalizers SHOULD strip inner-edge whitespace.
+  `==text ==` leaks literal `==` debris in every non-Obsidian renderer
+  (verified); Obsidian's laxer parser reportedly still renders it (reported
+  behavior — confirmed at the Appendix C gate). Normalizers SHOULD strip
+  inner-edge whitespace.
 - **H4.** Highlights SHOULD be single-line in source. (Obsidian soft-wraps;
   hard-wrapping mid-highlight is legal markdown but the reference parser and
   the grep helpers are line-based.)
@@ -117,11 +118,16 @@ Rules:
 
 - **Q1.** At most ONE inline annotation per highlight, and never adjacent to a
   labeled ref. Stacked inline footnotes `^[a]^[b]` are destroyed by pandoc
-  (its superscript extension wins and both footnotes die — verified). Need
-  more than one note? Promote to Level 2.
-- **Q2.** A literal `]` inside the note MUST be escaped `\]` (an unescaped one
-  truncates the note and spills text into the body — verified; the escape
-  works in both markdown-it and pandoc).
+  (its superscript extension wins and both footnotes die — verified). Mixing
+  `^[…]` with labeled refs on one highlight is a conformance error the linter
+  catches: it renders as two footnotes in some renderers but leaves the model
+  ambiguous, and it is one keystroke from the destroyed-stack case. Need more
+  than one note? Promote to Level 2.
+- **Q2.** Balanced bracket pairs inside the note are fine — `^[see
+  [[Korzybski]] for this]` parses correctly in markdown-it, pandoc, and the
+  reference parser (verified). Only an *unbalanced* literal `]` must be
+  escaped `\]` (unescaped, it truncates the note and spills text into the
+  body — verified; the escape works in both markdown-it and pandoc).
 - **Q3.** Know the two costs, then stop worrying: (a) Obsidian's Live Preview
   shows `^[...]` as raw text — an official, documented limitation (open
   feature request since 2021) that a plugin's decoration fixes; Reading view
@@ -169,25 +175,27 @@ Why this exact shape (each clause is load-bearing, established empirically):
    grammar in §6.2 (`[^m-…]`).
 2. A marginalia ref **binds to a highlight** iff the highlight's closing `==`
    precedes it on the same line with **no intervening characters** (canonical),
-   or with only closing punctuation — any of `.,;:!?)"'»…` — between
+   or with only closing punctuation — any of `.,;:!?)"'»…”’›` — between
    (accepted, non-canonical). The punctuation tolerance exists because
    footnote typography ("marker goes after the period") is trained into every
    human and LLM on earth; without it, `==x==.[^m-1]` would silently demote to
-   a point annotation while rendering pixel-identically (verified). Lint
-   normalizes to the tight form.
+   a point annotation while rendering pixel-identically (verified). Curly
+   quotes are in the set because smart-quote editors produce them constantly.
+   Lint normalizes to the tight form.
 3. **Stacking:** a run of adjacent marginalia refs — `==x==[^m-a][^m-b]` —
    all bind to that highlight; document order = display order. (Verified:
    stacked *labeled* refs render as distinct footnotes everywhere labeled
    footnotes work. This is exactly why Level 2 uses labeled refs, never
    inline ones — see Q1.)
-4. **Whitespace gap:** a marginalia ref separated from a closing `==` by
-   whitespace only, on the same line, is a **mis-normalized highlight
-   annotation** — it means the highlight binding, and tools MUST lint and MAY
-   auto-fix it to the tight form. It is *not* a point annotation. (This
-   precedence sentence exists because the two readings render identically
-   and a spec silent here contradicts itself.)
+4. **Gap rule:** a marginalia ref separated from a closing `==` by any
+   same-line run of **whitespace and/or closing punctuation only** (in any
+   mix — `==x== [^m-1]`, `==x==. [^m-1]`, `==x== .[^m-1]`) is a
+   **mis-normalized highlight annotation** — it means the highlight binding,
+   and tools MUST lint and MAY auto-fix it to the tight form. It is *not* a
+   point annotation. (This precedence rule exists because all these readings
+   render identically and a spec silent here contradicts itself.)
 5. **Point annotation:** any other marginalia ref binds to its position — a
-   margin note on a location rather than a span (§7.3). Scope by convention:
+   margin note on a location rather than a span (§7.2). Scope by convention:
    the enclosing block.
 6. **Nearest anchor only.** In `==a== and ==b==[^m-1]`, the ref binds to `b`
    alone. No action at a distance.
@@ -198,7 +206,7 @@ Because the anchor is a contiguous string *inside* the prose:
 
 - Editing the highlighted words: binding survives (the label, not the quote,
   is primary — deliberately the opposite of Hypothesis, because the author
-  owns this text). A stale echo (§7.2) is detected, flagged, never auto-edited.
+  owns this text). A stale echo (§6.5) is detected, flagged, never auto-edited.
 - Cut/paste/reorder within the file, of any size, any distance: survives.
 - Deleting the `==` marks but keeping the ref: degrades to a point
   annotation. Nothing lost.
@@ -233,11 +241,15 @@ label   = "m-" 1*30( a-z / 0-9 / "-" )     ; lowercase only, must not end in "-"
 - **L1.** The charset is the proven intersection of Obsidian footnote labels,
   GitHub's strict footnote rules (lowercase, no colons), and Obsidian
   block-id characters — so one string works as footnote label, grep target,
-  and block ID.
+  and block ID. Tools lint labels over 30 characters or ending in a hyphen.
 - **L2. Namespace rule:** *every* footnote whose label starts with `m-` is
   claimed by this spec. Don't name ordinary scholarly footnotes `m-…`
   (`[^m-theory]` would be captured). This is the entire discrimination
-  mechanism; its bluntness is its value.
+  mechanism; its bluntness is its value. Matching is case-sensitive and
+  lowercase-only — and because a near-miss like `[^m-Q4]` or `[^m-my_note]`
+  renders as a perfectly normal footnote while being invisible to every
+  Marginalia tool, near-miss labels (case or charset violations after an
+  `m-`/`m_` prefix) are a lint **error**, not a courtesy.
 - **L3. Random labels are the only conforming durable scheme.** Generate 4–6
   characters of `[a-z0-9]` (e.g. `m-7f3k`, `m-x2c9a`). Human-friendly
   sequential labels (`m-1`, `m-2`) are permitted only as **transients** that
@@ -275,16 +287,20 @@ All head parts optional. These are all valid entries:
 [^m-a1b2]: gus (2026-08-31): too broad #m/q #m/hl/yellow
 ```
 
-- **E1. HARD RULE — the definition line's body MUST be non-empty and MUST
-  contain at least one space** (≥ two tokens). This single rule is what stands
-  between you and the worst degradation in the corpus: in strict CommonMark,
-  `[^m-1]: word` parses as a *link reference definition* — the definition
-  vanishes from output entirely, the ref becomes a live hyperlink whose URL
-  is your annotation, and (verified) a violating definition even corrupts a
-  stacked *neighbor's* ref into a link. An empty definition (`[^m-1]:`) is
-  worse: pandoc swallows the entire *following paragraph of prose* into the
-  footnote (verified). Any speaker head satisfies E1 automatically.
-  Scaffolding tools MUST write placeholder text (e.g. `(pending annotation)`),
+- **E1. HARD RULE — the definition line's body MUST NOT parse as a CommonMark
+  link reference definition.** Concretely: it must be non-empty, contain at
+  least one space or tab (≥ two tokens), **and must not be a single token
+  followed only by a quoted or parenthesized phrase** (`nice (agreed)`,
+  `see "chapter 9"` — the token + link-*title* shape). This rule is what
+  stands between you and the worst degradation in the corpus: in strict
+  CommonMark a violating definition *vanishes from output entirely*, the ref
+  becomes a live hyperlink whose URL is your annotation (verified for both
+  the single-token and token+title shapes), and a violating definition even
+  corrupts a stacked *neighbor's* ref into a link (verified). An empty
+  definition (`[^m-1]:`) is worse: pandoc swallows the entire *following
+  paragraph of prose* into the footnote (verified). Any speaker head
+  (`gus: …`) satisfies E1 automatically — when in doubt, write one.
+  Scaffolding tools MUST write placeholder text (e.g. `pending annotation`),
   never an empty body.
 - **E2.** Never write bare `@name` in a definition — pandoc's default
   citation extension rewrites it into a citation span (verified). Speaker
@@ -301,11 +317,15 @@ All head parts optional. These are all valid entries:
   blocks indented 4 spaces. All inline markdown is legal in bodies —
   wikilinks, bold, `]`, tags (verified; the inline-footnote `]` problem of
   Q2 does not exist for definitions).
-- **E6.** Definitions live at column 0 with a blank line before them.
-  (Verified failure otherwise: without the preceding blank line,
-  pandoc-markdown lazily joins the definition into the paragraph above —
-  annotation text renders as visible mid-prose.) Blank lines *between*
-  adjacent definition lines are recommended but tested safe to omit.
+- **E6. HARD RULE — blank lines fence the definition block.** A definition
+  lives at column 0 (1–3 leading spaces still parse in renderers — linted,
+  normalize to 0) with a blank line before it: without one, pandoc-markdown
+  lazily joins the definition into the paragraph above — annotation text
+  renders as visible mid-prose (verified). Symmetrically, an unindented line
+  directly after the block is *lazily joined into the footnote* by renderers
+  (verified) — indent it 4 spaces if it is continuation, or put a blank line
+  before it if it is new prose. Blank lines *between* adjacent definition
+  lines are recommended but tested safe to omit.
 - **E7. Placement:** scatter definitions directly under the paragraph that
   anchors them. This is the normative default (it keeps diffs one-hunk-local
   and makes manual note-splitting take the definition along); gathering at
@@ -324,11 +344,18 @@ definition line, each a full entry (§6.3):
     - gus: found it. #m/resolved
 ```
 
-- **T1. HARD RULE — 4-space indent.** The near-universal 2-space list indent
-  *silently detaches* the thread: in four of six verified renderers the
-  replies escape the footnote and render as a top-level bulleted list sitting
-  in the middle of the document, while the footnote keeps only the head.
-  Nothing dangles, nothing warns. Linters MUST detect and re-indent.
+- **T1. HARD RULE — 4-space indent.** A 1–3-space indent (the near-universal
+  2-space list default included) *silently detaches* the thread: in four of
+  six verified renderers the replies escape the footnote and render as a
+  top-level bulleted list sitting in the middle of the document, while the
+  footnote keeps only the head. Nothing dangles, nothing warns. Linters MUST
+  detect and re-indent (error). A 5-or-more-space indent stays *inside* the
+  footnote in renderers (verified) but is non-canonical (fixable warning) —
+  parsers MUST still capture such items, or publish-time stripping leaks
+  them. `*`/`+` bullets are captured with a normalize warning (`-` is
+  canonical; remark rewrites bullets to `*`). A blank line between the head
+  and the item list is conforming — Prettier inserts one. Thread items are
+  single-line; don't hard-wrap them.
 - **T2. One rule for "second comment":** a follow-up on the same subject is a
   **thread reply**; a genuinely independent annotation (its own type, its own
   open/resolved status, a different author's separate point) is a **stacked
@@ -348,9 +375,17 @@ verbatim snapshot of the highlighted text at annotation time:
 
 - Echoes are the *redundancy layer*: the human-readable analogue of iA
   Writer's SHA-256 staleness guard and the WADM `TextQuoteSelector.exact`.
-  They power staleness detection (echo ≠ current highlight text, compared
-  whitespace-normalized), orphan repair (§8.3), importer identity (§9), and
-  recovery from label-destroying toolchains (§10).
+  They power staleness detection, orphan repair (§8.3), importer identity
+  (§9), and recovery from label-destroying toolchains (§10).
+- **Staleness:** an annotation is stale iff *any* segment's current highlight
+  text differs from its positionally-corresponding echo, compared
+  whitespace-normalized and case-sensitively. For multi-segment annotations,
+  echo count MUST equal segment count, one per segment in document order
+  (linted otherwise). Tools write echoes at creation/import time and refresh
+  one only on explicit user confirmation — never silently.
+- **Echoes carry no metadata:** echo items are excluded from tag, type, and
+  status derivation (otherwise highlighting a sentence that happens to
+  contain `#m/resolved` would resolve its own annotation — verified).
 - RECOMMENDED for anything long-lived, shared, or machine-imported; tools
   maintain them so humans never type them. Canonical position: first thread
   item. `echo` is reserved as a speaker name.
@@ -370,10 +405,10 @@ natively) that stay quarantined from your content taxonomy (bare `#q`,
 
 | Tag | Meaning |
 |---|---|
-| `#m/q` `#m/def` `#m/ref` `#m/todo` `#m/wow` … | **type** — open vocabulary; by convention the first tag is the type |
+| `#m/q` `#m/def` `#m/ref` `#m/todo` `#m/wow` … | **type** — open vocabulary; the type is the first non-reserved tag *of the head entry*; replies never set type. Reserved: exactly `#m/open`, `#m/resolved`, `#m/multi`, and the `#m/hl/…`, `#m/sync/…` families — everything else (even `#m/multiverse`) is a valid type |
 | `#m/open` / `#m/resolved` | **status** — absence = open; the *last* occurrence across definition + thread wins, so a reply after resolution doesn't silently reopen, and an explicit `#m/open` in a later reply does |
 | `#m/hl/yellow` `#m/hl/red` … | **highlight color/kind** — a tool styles the `==mark==` from its annotation's tag, so color survives as a readable word, not syntax (the Highlightr lesson: 709k installs of inline `<mark style>` debris, now unmaintained) |
-| `#m/multi` | declared multi-segment highlight (§7.4) |
+| `#m/multi` | declared multi-segment highlight (§7.3) |
 | `#m/sync/rw-884213` | **machine key** convention for importers (Readwise-class) — readable, greppable, native |
 
 ### 6.7 Full grammar
@@ -393,9 +428,7 @@ inside tables and callouts render in Reading view but not Live Preview, and
 `%%` (which this spec never uses) breaks in LP table cells. Definitions never
 go inside tables or callouts — column 0 only (E6).
 
-### 7.2 (reserved)
-
-### 7.3 Point annotations
+### 7.2 Point annotations
 
 A marginalia ref not bound to any highlight annotates a *location*:
 
@@ -408,7 +441,7 @@ The whole argument of this chapter feels rushed.[^m-c3d4]
 Use for commentary on a paragraph/section rather than a span. For a whole
 section, place it at the end of the heading line or lead paragraph.
 
-### 7.4 Multi-segment highlights
+### 7.3 Multi-segment highlights
 
 `==` cannot cross a blank line (H1), so a multi-block highlight is several
 highlights **sharing one label**, declared with `#m/multi`:
@@ -432,7 +465,7 @@ returns forty pages later without acknowledgment.
   segment (lossless, cosmetically redundant — verified). Obsidian's own
   same-label multi-ref rendering is on the live-vault checklist (Appendix C).
 
-### 7.5 Deep links
+### 7.4 Deep links
 
 To make an annotation a native link target, put an ordinary Obsidian block ID
 — **same string as the label** — at the end of the *prose paragraph*
@@ -469,11 +502,22 @@ where accept/reject silently *discards* comments, is the cautionary tale.
 Only ever explicit, never automatic:
 
 - **Archive** = remove the ref; move the definition under a visible
-  `## Archived marginalia` heading, rewritten as plain blockquote + list
-  (quote, then entries). Archived material renders everywhere, because —
-  hard-won honesty — an *unreferenced footnote definition is silently
-  omitted from rendered output by every footnote-aware renderer* (verified).
-  Bare footnote definitions are never an archive format.
+  `## Archived marginalia` heading, rewritten as a plain blockquote with the
+  entries inside it — this exact shape (which `flatten` also emits):
+
+  ```markdown
+  ## Archived marginalia
+
+  > the highlighted text
+  >
+  > — gus (2026-08-31): the head entry #m/q
+  >   - claude (2026-09-01): a reply
+  ```
+
+  Archived material renders everywhere, because — hard-won honesty — an
+  *unreferenced footnote definition is silently omitted from rendered output
+  by every footnote-aware renderer* (verified). Bare footnote definitions
+  are never an archive format.
 - **Delete** = remove ref AND definition, always as a pair, always
   confirmed.
 
@@ -526,8 +570,9 @@ Verified behaviors; treat as normative warnings.
 | **Obsidian Linter** | MUST disable **"Re-index footnotes"** (renumbers every label → destroys the entire namespace and ID layer vault-wide) and **"Footnote after punctuation"** (fights the normalizer; binding tolerates its output per §5.1.2, but pick one canonical form) |
 | **pandoc `-t markdown` round-trips** | **FORBIDDEN on source files.** Pandoc's AST stores footnotes without labels (verified via `-t json`): a round-trip renumbers `[^m-7f3k]` → `[^2]` (namespace erased, addresses dead), *forks* multi-segment annotations into diverging duplicates, and *deletes* orphaned definitions — while the file renders identically after. Echoes are the recovery key: a restore-ids pass can re-derive bindings from them. |
 | **pandoc rendering** (`-t html/pdf/docx`) | Safe as a one-way *render* — but see the publishing rule below. |
-| **Prettier 3** | Tested safe: preserves labels, thread indentation, and never splits `==…==[^m-…]`. |
-| **remark-based pipelines** | Footnote-safe, but remark-html silently deletes HTML comments (not used by this spec) and rewrites whitespace; test yours before trusting it. |
+| **Prettier 3** | Safe with `--prose-wrap preserve` (the default): labels and content survive; it inserts a blank line between a definition head and its thread list, which is conforming and parsed. **`--prose-wrap always` is FORBIDDEN**: it hard-wraps inside `==…==`, splitting highlights across lines and hiding them from line-based tooling (verified). |
+| **remark-based pipelines** | Footnote-safe on labels, but remark rewrites thread bullets `-` → `*` (parsed, linted, normalize back), silently deletes HTML comments (not used by this spec), and rewrites whitespace; test yours before trusting it. |
+| **CRLF line endings** | Conforming — the reference parser normalizes them. Tools implementing the grammar directly must remember JS/regex `$` vs `\r`. |
 | **Obsidian Publish / any export to other readers** | Annotations are *real footnotes* — that's the feature — so an unstripped publish renders your private marginalia as public numbered footnotes interleaved with genuine citations. **Strip or flatten before publishing** (§11 CLI). And because pandoc can't see labels, stripping MUST happen as a textual pre-pass on the markdown, *before* pandoc ever parses it. |
 
 ---
@@ -535,18 +580,31 @@ Verified behaviors; treat as normative warnings.
 ## 11. Extraction contract
 
 The **reference parser** (`marginalia.mjs`, shipped beside this spec —
-dependency-free, ~400 lines, Node ≥ 18) is the *single normative extractor*.
-It parses, lints (every hard rule above), strips, flattens, extracts, and
-exports WADM. The Obsidian plugin, CLI use, and agents all share it.
+dependency-free, Node ≥ 18, with a regression suite in `test.mjs`) is the
+*single normative extractor*. The Obsidian plugin, CLI use, and agents all
+share it.
 
 ```
 node marginalia.mjs lint    notes.md     # conformance check, exit 1 on errors
 node marginalia.mjs parse   notes.md     # full JSON model
 node marginalia.mjs extract notes.md     # human-readable digest of annotations
+node marginalia.mjs fix     notes.md     # apply mechanical fixes, print result
 node marginalia.mjs strip   notes.md     # clean copy: highlights stay, annotations go
 node marginalia.mjs flatten notes.md     # refs out, annotations to '## Marginalia' section
 node marginalia.mjs wadm    notes.md     # W3C Web Annotation JSON-LD export
 ```
+
+`strip` and `flatten` — the publish-safety commands — **refuse to run** while
+error-severity lints are present (`--force` overrides), because several error
+conditions are precisely the ones under which stripping would leak private
+text.
+
+What the linter actually checks: E1, E2, E3, E6/LAZY, T1 (+bullets), Q1
+(stacks and mixed forms), L1 (label grammar), L3, L4, NEAR-MISS, M1,
+ECHO-COUNT, STALE, H3, DEF-INDENT, BIND-SPACE/BIND-PUNCT, ORPHAN, DANGLING.
+Not machine-checkable: H1/H2 (a broken highlight is just literal text to a
+parser), E4 misattribution (a hint by design), and the §10 toolchain
+discipline — those remain your habits, not the linter's.
 
 Two grep patterns are blessed as **lossy helpers** — quick vault-wide
 discovery, nothing more:
@@ -572,18 +630,29 @@ one plugin that embedded Hypothesis JSON in `%%` blocks warns users not to
 edit it — and standoff's measured orphan rates are the disease this spec's
 in-file anchor cures).
 
-**Export** (one `oa:Annotation` per definition):
+**Export** (one `oa:Annotation` per definition, plus one per quick
+annotation, plus one per bare highlight):
 
 - `target.source` = the note's URI; `target.selector` = `TextQuoteSelector`
   with `exact` = current highlight text and ~32-char `prefix`/`suffix`
-  computed from the *live source text at export time* (never stored — so
-  never stale). Multi-segment → one target per segment.
-- `motivation`: `highlighting` for bare highlights, `commenting` when
-  entries exist; `#m/q` → `questioning`; others via extension.
+  computed at export time — **over the anchoring stream**: the source text
+  with all marginalia machinery (refs, quick notes, definition blocks, block
+  anchors) *and* the `==` fences removed. That is the plain-text stream an
+  external consumer's copy of the document actually contains; context
+  computed over raw annotated source would embed `[^m-…]` tokens and never
+  match anything (a defect this spec's own review caught). Never stored, so
+  never stale. Multi-segment → one target per segment.
+- `motivation`: `highlighting` for bare highlights, `commenting` for quick
+  and labeled annotations; `#m/q` → `questioning`; others via extension.
 - Each entry → `TextualBody` (`format: text/markdown`) with `creator` =
-  speaker, `created` = stamp. Threads → reply annotations targeting the head
-  annotation's IRI (`note-path#m-id` is the stable fragment).
-- `#m/resolved` → an annotation-status extension field.
+  speaker (omitted when the head parse is a low-confidence hint, per E4),
+  `created` = stamp (time stamps exported in ISO `T` form). A thread exports
+  as ordered bodies on the one annotation (what the reference exporter
+  emits); exporting replies as separate annotations targeting the head's IRI
+  (`note-path#m-id`) is a conforming alternative for consumers that model
+  threads.
+- `#m/resolved` → an annotation-status extension field (the `marginalia:`
+  prefix is declared in the export's `@context`).
 
 **Import** (Hypothesis/Readwise/WADM → vault): locate
 `TextQuoteSelector.exact` (exact → normalized → prefix/suffix-assisted
@@ -651,44 +720,71 @@ Each rejection below was tested, not assumed.
 
 The complete list of MUSTs whose violation causes verified damage:
 
-1. **E1** — definition body: non-empty, ≥ one space. (CommonMark link-ref
-   catastrophe; pandoc paragraph-swallow.)
-2. **T1** — thread replies: exactly 4-space (or tab) indent. (Silent thread
-   detachment at 2 spaces.)
-3. **Q1** — never stack inline footnotes; one `^[…]` max per highlight.
-   (Pandoc destroys stacks.)
+1. **E1** — definition body must not parse as a CommonMark link-ref
+   definition: non-empty, ≥ two tokens, and never a single token plus a
+   quoted/parenthesized phrase. A speaker head is always safe. (CommonMark
+   vanishing-definition catastrophe; pandoc paragraph-swallow.)
+2. **T1** — thread replies: 4-space (or tab) indent, `-` bullet. (Silent
+   thread detachment at 1–3 spaces; 5+ renders but must still be captured.)
+3. **Q1** — never stack inline footnotes, never mix `^[…]` with labeled
+   refs; one `^[…]` max per highlight. (Pandoc destroys stacks.)
 4. **L3/L4** — durable labels are random; duplicate labels are an error.
    (Silent rebinding; renderer-divergent winners.)
 5. **E2/E3** — no bare `@name`, no `%%…%%` in definitions. (Citation
    mangling; visible leakage.)
-6. **E6** — blank line before definitions. (Pandoc lazy-join leaks
-   annotations into prose.)
+6. **E6/LAZY** — blank lines fence the definition block, before and after.
+   (Pandoc lazy-join leaks annotations into prose; renderers absorb
+   trailing prose into the footnote.)
 7. **H1/H2** — highlights never cross blank lines or half-overlap spans.
 8. **M1** — shared labels require `#m/multi`.
 9. **§10** — disable Linter footnote re-indexing; never pandoc-round-trip
-   sources; strip before publishing.
-10. **H5/§11** — extraction ignores code regions.
+   sources; never Prettier `--prose-wrap always`; strip before publishing.
+10. **H5/§11** — extraction ignores code regions (fenced, inline, and
+    indented code blocks alike).
 
 ## Appendix B — Collected grammar (ABNF-ish)
 
-```abnf
-highlight    = "==" 1*( inline-char ) "=="          ; no blank line, tight edges
-quick-ann    = highlight "^[" note-text "]"          ; note-text: "]" escaped as "\]"
-anchor       = highlight [ close-punct ] 1*ref       ; close-punct non-canonical
-ref          = "[^" label "]"
-label        = "m-" 1*30( %x61-7A / DIGIT / "-" )    ; not ending in "-"
-close-punct  = "." / "," / ";" / ":" / "!" / "?" / ")" / DQUOTE / "'" / "»" / "…"
+Canonical forms first; where parsers MUST accept more (renderer reality),
+the comment says so. The reference parser is the tie-breaker.
 
-definition   = "[^" label "]:" SP entry *( LF thread-item ) *( continuation )
-thread-item  = 4SP "- " entry                        ; or HTAB for 4SP
-continuation = LF LF 4SP block                       ; native footnote continuation
+```abnf
+highlight    = "==" 1*( inline-char ) "=="       ; no blank line, tight edges (H3)
+quick-ann    = highlight "^[" note-text "]"      ; brackets balance; escape only a
+                                                 ;   lone "]" as "\]" (Q2)
+anchor       = highlight 1*ref                   ; canonical: refs touch the "=="
+                                                 ; accepted: closing punctuation
+                                                 ;   and/or whitespace in the gap
+                                                 ;   (§5.1 rules 2 & 4 — lint)
+ref          = "[^" label "]"
+label        = "m-" 1*30( %x61-7A / DIGIT / "-" ); lowercase; not ending in "-"
+close-punct  = "." / "," / ";" / ":" / "!" / "?" / ")" / DQUOTE / "'" / "»"
+             / "…" / %x201D / %x2019 / %x203A    ; incl. curly quotes ” ’ ›
+
+definition   = "[^" label "]:" SP def-body
+               *( LF thread-item ) *( LF continuation )
+                                                 ; canonical: column 0; accepted:
+                                                 ;   0-3 leading spaces (lint);
+                                                 ;   one blank line before the
+                                                 ;   item list is conforming
+def-body     = entry                             ; E1 applies HERE only: >= 2
+                                                 ;   tokens, never token+"title"
+                                                 ;   or token+(title)
+thread-item  = 4SP "- " entry                    ; canonical; accepted: HTAB or
+                                                 ;   >4SP indent, "*"/"+" bullets
+                                                 ;   (all linted); single-line
+continuation = LF LF 4SP block                   ; native footnote continuation;
+                                                 ;   >=4SP accepted
 entry        = [ head ] body
-head         = [ speaker SP ] [ "(" stamp ")" ] ":" SP
+head         = [ speaker ] [ SP "(" stamp ")" ] ":" SP
+                                                 ; "gus:", "gus (…):", "(…):" all
+                                                 ;   valid — no space needed
+                                                 ;   between speaker and ":"
 speaker      = 1*( ALPHA / DIGIT / "." / "_" / "-" ) ; "echo" reserved
-stamp        = date [ SP time ]                      ; YYYY-MM-DD / HH:MM
-body         = inline-markdown                       ; MUST contain SP (E1)
+stamp        = date [ SP time ]                  ; YYYY-MM-DD / HH:MM
+body         = inline-markdown                   ; thread-item bodies are free;
+                                                 ;   only def-body carries E1
 tag          = "#m/" 1*( ALPHA / DIGIT / "/" / "-" )
-block-anchor = SP "^" label                          ; end of prose paragraph only
+block-anchor = SP "^" label                      ; end of prose paragraph only
 ```
 
 ## Appendix C — Live-vault verification checklist (the 1.0 gate)
@@ -721,5 +817,9 @@ matrix, community conventions and complaints); four independent candidate
 specs (native-composition, bespoke-delimiter, attribute-lineage, standoff);
 twelve adversarial attack reports; three judge scorecards (unanimous winner:
 the footnote-carrier design, with mandated surgery and cross-candidate grafts
-— all applied above). Empirical claims marked "verified" were reproduced on
-the harness in `examples/` or cited from the research corpus.
+— all applied above), and a four-lens adversarial review of this document,
+the reference parser, and the companion docs (two blockers and a dozen
+majors found and fixed; the regression suite in `test.mjs` encodes them).
+Empirical claims marked "verified" were reproduced on the multi-renderer
+harness shipped in `examples/harness/`, or are cited from the research
+corpus.

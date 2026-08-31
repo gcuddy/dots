@@ -1,0 +1,14 @@
+{
+  "name": "marginalia-degradation-harness",
+  "private": true,
+  "type": "module",
+  "description": "Renders a markdown snippet under the six parsers the Marginalia spec's verified claims were tested against.",
+  "dependencies": {
+    "markdown-it": "^14.1.0",
+    "markdown-it-footnote": "^4.0.0",
+    "markdown-it-mark": "^4.0.0",
+    "remark": "^15.0.1",
+    "remark-gfm": "^4.0.0",
+    "remark-html": "^16.0.1"
+  }
+}

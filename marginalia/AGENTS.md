@@ -48,12 +48,21 @@ node marginalia.mjs parse file.md      # JSON model
 
 To annotate a highlight, do exactly this:
 
-1. Mint a random label: `m-` + 4–6 chars of `[a-z0-9]` (e.g. `m-k3f9`).
-   Never reuse a label that exists in the file; never use `m-1`-style
-   sequential labels.
+1. Mint a random label: `m-` + 4–6 chars of `[a-z0-9]`, lowercase (e.g.
+   `m-k3f9`). Never reuse a label that exists in the file (exception below);
+   never use `m-1`-style sequential labels.
 2. Append `[^m-k3f9]` **immediately after** the closing `==` — no space.
-3. Add, after the paragraph (blank line before it, column 0):
+   When wrapping a selection in `==…==`, keep the fences tight: no
+   whitespace just inside them.
+3. Add, after the paragraph (blank line before it AND after it, column 0):
    `[^m-k3f9]: yourname (YYYY-MM-DD): your comment #m/q`
+4. Optionally add an echo as the first thread item (recommended for anything
+   machine-written), indented exactly 4 spaces:
+   `    - echo: <the exact highlighted text>`
+
+For a **multi-segment** highlight (one comment spanning several passages):
+reuse ONE label on every segment's highlight and put `#m/multi` in the
+definition, with one `- echo:` item per segment in document order.
 
 To reply to an existing annotation, append a thread item under its
 definition, indented **exactly 4 spaces**:
@@ -66,22 +75,29 @@ To resolve: append a reply carrying `#m/resolved` and a short rationale.
 Never delete refs, definitions, highlights, or `echo` items to resolve
 anything.
 
-## Hard rules (violations corrupt rendering — verified)
+## Hard rules
 
-1. Definition body: non-empty, at least two words. Never `[^m-x]: #m/todo`,
-   never `[^m-x]:` alone.
-2. Thread indent: exactly 4 spaces (or one tab). 2-space indents silently
-   detach the thread.
-3. Never stack inline footnotes (`^[a]^[b]`) and never mix `^[…]` with
-   labeled refs on one highlight. Use stacked labeled refs instead:
-   `==x==[^m-a][^m-b]`.
+1. Definition body must never look like a CommonMark link reference:
+   non-empty, at least two words, and never a single word followed only by a
+   quoted or parenthesized phrase. Never `[^m-x]: #m/todo`, never `[^m-x]:`
+   alone, never `[^m-x]: nice (agreed)`. A speaker head (`gus: …`) is always
+   safe. (Violations make the definition vanish in strict CommonMark.)
+2. Thread indent: exactly 4 spaces (or one tab), `-` bullet. 1–3-space
+   indents silently detach the thread in most renderers.
+3. Never stack inline footnotes (`^[a]^[b]` — pandoc destroys the stack) and
+   never mix `^[…]` with labeled refs on one highlight (linted as an error:
+   ambiguous model, one keystroke from the destroyed-stack case). Use
+   stacked labeled refs instead: `==x==[^m-a][^m-b]`.
 4. No bare `@name` and no `%%…%%` inside definitions.
-5. Blank line before every definition.
+5. Blank line before every definition and after the definition block.
 6. Don't create highlights spanning a blank line; don't half-overlap other
    inline spans.
 7. Before publishing/exporting for other readers, strip or flatten:
-   `node marginalia.mjs strip file.md` / `flatten`.
-8. Never run a footnote-renumbering formatter or `pandoc -t markdown` over
-   source files — it destroys the label namespace.
+   `node marginalia.mjs strip file.md` / `flatten`. (Both refuse to run
+   while error-severity lints are present — that is protection, not an
+   obstacle; fix the errors.)
+8. Never run a footnote-renumbering formatter, `pandoc -t markdown`, or
+   Prettier `--prose-wrap always` over source files.
 
-Run `node marginalia.mjs lint file.md` after writing; fix every `error`.
+Run `node marginalia.mjs lint file.md` after writing; fix every `error` and
+`warn` (mechanical ones: `node marginalia.mjs fix file.md`).
