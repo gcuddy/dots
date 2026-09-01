@@ -211,6 +211,23 @@ const hasLint = (m, rule, sev) => m.lints.some((l) => l.rule === rule && (!sev |
   t('h4wrap: definition-block lines exempt', !hasLint(m4, 'H4-WRAP'), JSON.stringify(m4.lints));
   const m5 = parse('Code case:\n\n```\n==wrapped\nacross==\n```\n\nProse after.\n');
   t('h4wrap: fenced code ignored', !hasLint(m5, 'H4-WRAP'));
+  // a block-start boundary line must still be evaluated as an opener itself
+  const m6 = parse('Odd == token in prose here.\n- bullet ==wrapped in a list\n  closing== continuation text.\n');
+  t('h4wrap: bullet after odd line still opens its own pair', hasLint(m6, 'H4-WRAP', 'warn'), JSON.stringify(m6.lints));
+  const m7 = parse('| a == b |\n| c == d |\n| e == f |\n');
+  t('h4wrap: table rows excluded (no cross-row highlight exists)', !hasLint(m7, 'H4-WRAP'), JSON.stringify(m7.lints));
+  const m8 = parse('Setext heading with == in it\n======\nProse == here after.\n');
+  t('h4wrap: setext underline is a boundary, not an opener', !hasLint(m8, 'H4-WRAP'), JSON.stringify(m8.lints));
+}
+
+// --- stale set-match is gated on echo/segment count mismatch --------------
+// With equal counts the positional pairing is trustworthy; the set fallback
+// would otherwise mask a real edit that duplicates another echo's text.
+{
+  const m = parse('==A==[^m-z1] and ==B==[^m-z1].\n\n[^m-z1]: gus: two segments here #m/multi\n    - echo: A\n    - echo: A\n');
+  t('stale gate: equal counts, edit onto duplicate text is STALE', m.annotations[0].stale === true, JSON.stringify(m.lints));
+  const m2 = parse('==X==[^m-z2] and ==X==[^m-z2].\n\n[^m-z2]: gus: two segments here #m/multi\n    - echo: X\n    - echo: Y\n');
+  t('stale gate: duplicate segments vs edited echo is STALE', m2.annotations[0].stale === true, JSON.stringify(m2.lints));
 }
 
 // --- fix command ----------------------------------------------------------

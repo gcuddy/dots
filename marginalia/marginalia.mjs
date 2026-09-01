@@ -237,12 +237,24 @@ export function parse(input, opts = {}) {
   // odd-count line. Balanced same-line highlights count even; definition
   // blocks are exempt; a rare prose `a == b` split over two lines is an
   // accepted warn-level false positive.
+  // Known false negative: blockquote continuation lines (`> …`) count as
+  // block starts here, so a wrap inside a quote goes undetected — accepted
+  // under "conservative". Table rows and setext underlines are excluded: a
+  // highlight cannot span table rows, and `====` underlines are structure.
   {
     const oddEq = (l) => ((l.match(/==/g) || []).length % 2) === 1;
+    const isTableRow = (l) => /^\s*\|/.test(l);
+    const isSetext = (l) => /^ {0,3}=+\s*$/.test(l);
     for (let i = 0; i < maskedLines.length; i++) {
-      if (defLineSet.has(i) || maskedLines[i].trim() === '' || !oddEq(maskedLines[i])) continue;
+      if (defLineSet.has(i) || maskedLines[i].trim() === '' || isTableRow(maskedLines[i]) ||
+          isSetext(maskedLines[i]) || !oddEq(maskedLines[i])) continue;
       for (let j = i + 1; j < maskedLines.length; j++) {
-        if (defLineSet.has(j) || maskedLines[j].trim() === '' || isBlockStart(maskedLines[j])) { i = j; break; }
+        if (defLineSet.has(j) || maskedLines[j].trim() === '' || isTableRow(maskedLines[j]) ||
+            isSetext(maskedLines[j]) || isBlockStart(maskedLines[j])) {
+          // re-evaluate the boundary line itself as an opener (a bullet can
+          // start its own wrapped pair); outer i++ lands on j — monotonic.
+          i = j - 1; break;
+        }
         if (oddEq(maskedLines[j])) {
           lint('H4-WRAP', 'warn', i + 1,
             `possible highlight spanning a line break — Marginalia highlights are single-line (H4); ` +
@@ -366,24 +378,29 @@ export function parse(input, opts = {}) {
         `label [^${label}] bound to ${segments.length} highlights without #m/multi — ` +
         `accidental label reuse, or declare it multi-segment`);
     // M2 / MULTI-STALE — the inverse of M1: declared #m/multi but the
-    // segments are gone. Fires only when the label is not orphaned (ORPHAN
-    // already covers the zero-ref case), i.e. in practice at exactly one
-    // bound segment: an edit lost a segment, and the echoes say which (§8.3).
+    // segments are gone. Fires only while some ref survives (ORPHAN covers
+    // the zero-ref case) — in the common drift that is exactly one bound
+    // segment, though refs whose fences were deleted can leave zero segments
+    // with the label still bound. The echoes say what is missing (§8.3).
     if (allTags.includes('#m/multi') && bound.length > 0 && segments.length <= 1)
       lint('MULTI-STALE', 'warn', def.line,
         `[^${label}] #m/multi but only ${segments.length} bound segment(s) — a segment may have been lost (see echoes)`);
     if (allTags.includes('#m/multi') && echoes.length && echoes.length !== segments.length)
       lint('ECHO-COUNT', 'warn', def.line,
         `[^${label}] has ${segments.length} segment(s) but ${echoes.length} echo(es) — one echo per segment, in order`);
-    // Staleness: positional pairing is primary; a positional mismatch is
-    // suppressed when the texts still match as a set (§6.5) — a lost segment
-    // shifts survivors' positions, and pure positional comparison would flag
-    // a byte-identical survivor as edited. Loss stays ECHO-COUNT's signal.
+    // Staleness: positional pairing is primary. Only when the counts differ
+    // (a segment vanished, positions shifted) is a positional mismatch
+    // suppressed by set membership (§6.5) — with equal counts the pairing is
+    // trustworthy, and the fallback would mask a real edit that happens to
+    // duplicate another echo's text. Loss stays ECHO-COUNT's signal; a
+    // text-identical block reorder now reads as STALE, the lesser evil.
     const nEchoes = echoes.map(norm);
     const nSegs = segments.map((s) => norm(s.highlight.text));
+    const countsMatch = echoes.length === segments.length;
     const stale = echoes.length > 0 && segments.length > 0 &&
       segments.some((s, ix) => {
         if (echoes[ix] === undefined || nSegs[ix] === nEchoes[ix]) return false;
+        if (countsMatch) return true;
         return !nEchoes.includes(nSegs[ix]) && !nSegs.includes(nEchoes[ix]);
       });
     if (stale)

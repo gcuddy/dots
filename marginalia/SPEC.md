@@ -387,13 +387,16 @@ verbatim snapshot of the highlighted text at annotation time:
   (§9), and recovery from label-destroying toolchains (§10).
 - **Staleness:** an annotation is stale iff *any* segment's current highlight
   text differs from its positionally-corresponding echo, compared
-  whitespace-normalized and case-sensitively — with one suppression: a
-  positional mismatch does not count when the texts still match as a *set*
-  (the segment's text equals some echo, or that echo equals some segment).
-  Losing a segment shifts every survivor's position, and pure positional
-  comparison would flag a byte-identical survivor as edited; set matching
-  keeps STALE for real edits and leaves loss to ECHO-COUNT, the honest
-  signal that a segment vanished.
+  whitespace-normalized and case-sensitively — with one suppression: when
+  echo count and segment count *differ* (a segment vanished, positions
+  shifted), a positional mismatch does not count if the texts still match as
+  a *set* (the segment's text equals some echo, or that echo equals some
+  segment). With equal counts the positional pairing is trustworthy and no
+  suppression applies — otherwise an edit that lands on a text duplicating
+  another echo would be invisible. Set matching keeps STALE for real edits
+  and leaves loss to ECHO-COUNT, the honest signal that a segment vanished;
+  the cost is that a text-identical block *reorder* reads as STALE (info),
+  the lesser evil.
 - Echoes are optional. When any are present on a declared `#m/multi`, echo
   count MUST equal segment count, one per segment in selection (document)
   order — the count lint (ECHO-COUNT, warn, §11) fires *only when at least
@@ -487,8 +490,9 @@ returns forty pages later without acknowledgment.
 - **M2.** The inverse drift is linted too: a definition declaring `#m/multi`
   with only one bound segment (MULTI-STALE, warn, §11) means an edit
   probably lost a segment — the echoes name what is missing (repair: §8.3).
-  Zero bound refs is ORPHAN's territory, so M2 fires at exactly one bound
-  segment.
+  Zero bound refs is ORPHAN's territory, so M2 fires only while some ref
+  survives — in the common drift, exactly one bound segment (refs whose
+  fences were deleted can leave zero segments with the label still bound).
 - **M3.** Degradation is honest, not perfect: GitHub and markdown-it render
   one note with multiple backrefs; pandoc duplicates the note body per
   segment (lossless, cosmetically redundant — verified). Obsidian's own
@@ -609,7 +613,7 @@ Verified behaviors; treat as normative warnings.
 | **Obsidian Linter** | MUST disable **"Re-index footnotes"** (renumbers every label → destroys the entire namespace and ID layer vault-wide) and **"Footnote after punctuation"** (fights the normalizer; binding tolerates its output per §5.1.2, but pick one canonical form) |
 | **pandoc `-t markdown` round-trips** | **FORBIDDEN on source files.** Pandoc's AST stores footnotes without labels (verified via `-t json`): a round-trip renumbers `[^m-7f3k]` → `[^2]` (namespace erased, addresses dead), *forks* multi-segment annotations into diverging duplicates, and *deletes* orphaned definitions — while the file renders identically after. Echoes are the recovery key: a restore-ids pass can re-derive bindings from them. |
 | **pandoc rendering** (`-t html/pdf/docx`) | Safe as a one-way *render* — but see the publishing rule below. |
-| **Prettier 3** | Safe with `--prose-wrap preserve` (the default): labels and content survive; it inserts a blank line between a definition head and its thread list, which is conforming and parsed. **`--prose-wrap always` is FORBIDDEN**: it hard-wraps inside `==…==`, splitting highlights across lines and hiding them from line-based tooling (verified). |
+| **Prettier 3** | Safe with `--prose-wrap preserve` (the default): labels and content survive; it inserts a blank line between a definition head and its thread list, which is conforming and parsed. **`--prose-wrap always` is FORBIDDEN**: it hard-wraps inside `==…==`, splitting highlights across lines and hiding them from line-based tooling (verified; H4-WRAP, §11, heuristically flags the wrapped result). |
 | **remark-based pipelines** | Footnote-safe on labels, but remark rewrites thread bullets `-` → `*` (parsed, linted, normalize back), silently deletes HTML comments (not used by this spec), and rewrites whitespace; test yours before trusting it. |
 | **CRLF line endings** | Conforming — the reference parser normalizes them. Tools implementing the grammar directly must remember JS/regex `$` vs `\r`. |
 | **Obsidian Publish / any export to other readers** | Annotations are *real footnotes* — that's the feature — so an unstripped publish renders your private marginalia as public numbered footnotes interleaved with genuine citations. **Strip or flatten before publishing** (§11 CLI). And because pandoc can't see labels, stripping MUST happen as a textual pre-pass on the markdown, *before* pandoc ever parses it. |
@@ -640,7 +644,7 @@ text.
 
 What the linter actually checks: E1, E2, E3, E6/LAZY, T1 (+bullets), Q1
 (stacks and mixed forms), L1 (label grammar), L3, L4, NEAR-MISS, M1 (error),
-M2/MULTI-STALE (warn — fires at exactly one bound segment; zero refs is
+M2/MULTI-STALE (warn — fires while some ref survives; zero refs is
 ORPHAN's), ECHO-COUNT (warn — gated on echoes present, §6.5), STALE (with
 the §6.5 set-match suppression), H3, H4-WRAP (warn, heuristic — a probable
 highlight wrapped across a line break), DEF-INDENT, BIND-SPACE/BIND-PUNCT,
