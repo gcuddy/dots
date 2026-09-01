@@ -34,6 +34,13 @@ const LINKREF_SHAPE = /^\S+[ \t]*$|^\S+[ \t]+("[^"]*"|'[^']*'|\([^)]*\))[ \t]*$/
 // spans here; indented code blocks after definition extents are known.
 function maskFencesAndInline(text) {
   const lines = text.split('\n');
+  // YAML frontmatter is metadata, not prose: mask it entirely so ==marks==
+  // inside properties are never highlights and tools never write there.
+  if (lines[0] === '---') {
+    let fm = 1;
+    while (fm < lines.length && lines[fm] !== '---' && lines[fm] !== '...') fm++;
+    if (fm < lines.length) for (let i = 0; i <= fm; i++) lines[i] = '\x00'.repeat(lines[i].length);
+  }
   let fence = null;
   const out = lines.map((line) => {
     const open = line.match(/^(\s*)(`{3,}|~{3,})/);
@@ -598,6 +605,19 @@ export function fix(input) {
   }
   for (const e of edits.sort((a, b) => b.start - a.start))
     text = text.slice(0, e.start) + e.text + text.slice(e.end);
+  // L3 normalize: sequential labels are transients — relabel to random
+  model = parse(text);
+  const taken = new Set([...model.refs.map((r) => r.label), ...model.defBlocks.map((b) => b.label)]);
+  for (const b of model.defBlocks) {
+    if (!/^m-\d+$/.test(b.label)) continue;
+    let fresh;
+    do {
+      fresh = 'm-';
+      for (let i = 0; i < 4; i++) fresh += 'abcdefghijklmnopqrstuvwxyz0123456789'[Math.floor(Math.random() * 36)];
+    } while (taken.has(fresh));
+    taken.add(fresh);
+    text = text.split(`[^${b.label}]`).join(`[^${fresh}]`);
+  }
   return text;
 }
 

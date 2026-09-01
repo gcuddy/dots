@@ -97,8 +97,9 @@ Rules (all inherited from how markdown actually parses, verified):
 - **H4.** Highlights SHOULD be single-line in source. (Obsidian soft-wraps;
   hard-wrapping mid-highlight is legal markdown but the reference parser and
   the grep helpers are line-based.)
-- **H5.** `==` inside code spans and fenced code blocks is never a highlight.
-  All extraction MUST ignore code regions (§11).
+- **H5.** `==` inside code spans, fenced code blocks, and YAML frontmatter is
+  never a highlight. All extraction MUST ignore code regions and frontmatter
+  (§11).
 
 ---
 
@@ -588,7 +589,7 @@ share it.
 node marginalia.mjs lint    notes.md     # conformance check, exit 1 on errors
 node marginalia.mjs parse   notes.md     # full JSON model
 node marginalia.mjs extract notes.md     # human-readable digest of annotations
-node marginalia.mjs fix     notes.md     # apply mechanical fixes, print result
+node marginalia.mjs fix     notes.md     # mechanical fixes + relabel sequential labels
 node marginalia.mjs strip   notes.md     # clean copy: highlights stay, annotations go
 node marginalia.mjs flatten notes.md     # refs out, annotations to '## Marginalia' section
 node marginalia.mjs wadm    notes.md     # W3C Web Annotation JSON-LD export
