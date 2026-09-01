@@ -180,6 +180,39 @@ const hasLint = (m, rule, sev) => m.lints.some((l) => l.rule === rule && (!sev |
   t('bullets: * linted', hasLint(m3, 'T-BULLET', 'warn'));
 }
 
+// --- major: M2/MULTI-STALE — declared multi lost a segment ----------------
+// The exact drift scenario: first segment of a 2-segment multi deleted by an
+// edit. The survivor ("Beta") is byte-identical to its real echo but pairs
+// positionally against echoes[0] ("Alpha") — set-match must suppress STALE;
+// MULTI-STALE + ECHO-COUNT carry the honest signal instead.
+{
+  const m = parse('Keep ==Beta==[^m-y1] here.\n\n[^m-y1]: gus: spans both costumes #m/multi\n    - echo: Alpha\n    - echo: Beta\n');
+  t('m2: declared multi, one segment warns', hasLint(m, 'MULTI-STALE', 'warn'));
+  t('m2: echo-count still warns on loss', hasLint(m, 'ECHO-COUNT', 'warn'));
+  t('m2: set-match kills spurious stale on survivor', m.annotations[0].stale === false && !hasLint(m, 'STALE'),
+    JSON.stringify(m.lints));
+  const m2 = parse('==a==[^m-y2] and ==b==[^m-y2].\n\n[^m-y2]: gus: spans both here #m/multi\n    - echo: a\n    - echo: b\n');
+  t('m2: healthy multi clean', !hasLint(m2, 'MULTI-STALE'), JSON.stringify(m2.lints));
+  const m3 = parse('[^m-y3]: gus: multi with no refs anywhere #m/multi\n    - echo: a\n    - echo: b\n');
+  t('m2: zero refs stays ORPHAN territory', hasLint(m3, 'ORPHAN', 'warn') && !hasLint(m3, 'MULTI-STALE'));
+  const m4 = parse('Keep ==Beta EDITED==[^m-y4] here.\n\n[^m-y4]: gus: spans both costumes #m/multi\n    - echo: Alpha\n    - echo: Beta\n');
+  t('m2: genuinely edited survivor still stale', m4.annotations[0].stale === true);
+}
+
+// --- major: H4-WRAP — highlight wrapped across a soft line break ----------
+{
+  const m = parse('This ==wrapped highlight\nspans a soft break== in one paragraph.\n');
+  t('h4wrap: wrapped pair warns', hasLint(m, 'H4-WRAP', 'warn'), JSON.stringify(m.lints));
+  const m2 = parse('A ==balanced== line and ==another== one.\nSecond line ==also balanced== fine.\n');
+  t('h4wrap: balanced lines clean', !hasLint(m2, 'H4-WRAP'), JSON.stringify(m2.lints));
+  const m3 = parse('An odd == token here.\n\nAnother odd == token, separate block.\n');
+  t('h4wrap: blank line ends the block', !hasLint(m3, 'H4-WRAP'));
+  const m4 = parse('==x==[^m-y9] here.\n\n[^m-y9]: gus: note that a == b holds\n    - claude: and b == c too\n');
+  t('h4wrap: definition-block lines exempt', !hasLint(m4, 'H4-WRAP'), JSON.stringify(m4.lints));
+  const m5 = parse('Code case:\n\n```\n==wrapped\nacross==\n```\n\nProse after.\n');
+  t('h4wrap: fenced code ignored', !hasLint(m5, 'H4-WRAP'));
+}
+
 // --- fix command ----------------------------------------------------------
 {
   const fixed = fix('==x ==. [^m-v1] y.\n[^m-v1]: gus: note text here\n  - claude: shallow reply\n');

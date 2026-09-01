@@ -84,7 +84,10 @@ Rules (all inherited from how markdown actually parses, verified):
 
 - **H1.** A highlight MUST NOT cross a blank line. No parser supports it
   (verified across six renderers). For multi-paragraph annotation targets, see
-  multi-segment highlights (§7.3) or point annotations (§7.2).
+  multi-segment highlights (§7.3) or point annotations (§7.2). A selection
+  swept across N blocks therefore yields N independent highlights with no
+  linkage between them — bare highlights have no identity to link; linkage
+  requires a shared-label definition (§7.3).
 - **H2.** A highlight MUST NOT partially overlap another inline span
   (the Fletcher Penney / PyMdown rule: `*italic ==both* wrong==` is
   undefined behavior everywhere). Fully nested is fine: `**==bold mark==**`
@@ -96,7 +99,8 @@ Rules (all inherited from how markdown actually parses, verified):
   inner-edge whitespace.
 - **H4.** Highlights SHOULD be single-line in source. (Obsidian soft-wraps;
   hard-wrapping mid-highlight is legal markdown but the reference parser and
-  the grep helpers are line-based.)
+  the grep helpers are line-based.) Tools flag the probable wrapped case
+  heuristically — see H4-WRAP in §7.3.
 - **H5.** `==` inside code spans, fenced code blocks, and YAML frontmatter is
   never a highlight. All extraction MUST ignore code regions and frontmatter
   (§11).
@@ -332,7 +336,10 @@ All head parts optional. These are all valid entries:
   and makes manual note-splitting take the definition along); gathering at
   the file's end is a *display* concern for tools, not a storage convention.
   Rendering is identical either way (footnotes are position-independent —
-  verified).
+  verified). For a multi-segment annotation (§7.3) the definition goes after
+  the *last* segment's block; the *first* segment is the annotation's
+  canonical location — the place deep links (§7.4) and jump-to-annotation
+  tools land.
 
 ### 6.4 Threads
 
@@ -380,10 +387,19 @@ verbatim snapshot of the highlighted text at annotation time:
   (§9), and recovery from label-destroying toolchains (§10).
 - **Staleness:** an annotation is stale iff *any* segment's current highlight
   text differs from its positionally-corresponding echo, compared
-  whitespace-normalized and case-sensitively. For multi-segment annotations,
-  echo count MUST equal segment count, one per segment in document order
-  (linted otherwise). Tools write echoes at creation/import time and refresh
-  one only on explicit user confirmation — never silently.
+  whitespace-normalized and case-sensitively — with one suppression: a
+  positional mismatch does not count when the texts still match as a *set*
+  (the segment's text equals some echo, or that echo equals some segment).
+  Losing a segment shifts every survivor's position, and pure positional
+  comparison would flag a byte-identical survivor as edited; set matching
+  keeps STALE for real edits and leaves loss to ECHO-COUNT, the honest
+  signal that a segment vanished.
+- Echoes are optional. When any are present on a declared `#m/multi`, echo
+  count MUST equal segment count, one per segment in selection (document)
+  order — the count lint (ECHO-COUNT, warn, §11) fires *only when at least
+  one echo exists*; an echo-less annotation is conforming, just unprotected.
+  Tools write echoes at creation/import time and refresh one only on
+  explicit user confirmation — never silently.
 - **Echoes carry no metadata:** echo items are excluded from tag, type, and
   status derivation (otherwise highlighting a sentence that happens to
   contain `#m/resolved` would resolve its own annotation — verified).
@@ -457,11 +473,23 @@ returns forty pages later without acknowledgment.
 ```
 
 - **M1.** Shared-label spanning MUST be declared with `#m/multi` in the
-  definition. Undeclared label reuse is a lint warning (it is far more often
-  an accidental copy-paste than an intentional spanning — the attacks
+  definition. Undeclared label reuse is a lint **error** (it is far more
+  often an accidental copy-paste than an intentional spanning — the attacks
   demonstrated silent semantic merges without this rule). One echo per
-  segment, in document order.
-- **M2.** Degradation is honest, not perfect: GitHub and markdown-it render
+  segment, in document order. `#m/multi` describes the *source
+  representation* — the annotation needs several `==` spans in the file —
+  not any semantic property of the selection: a hard-wrapped one-paragraph
+  selection legitimately segments per source line and is declared `#m/multi`
+  like any other. The opposite mistake — one `==…==` pair wrapped *across*
+  the line break — renders in mark-capable renderers yet is invisible to the
+  line-scoped grammar (H4, §3); tools flag the probable case (H4-WRAP, warn,
+  §11): close `==` on the same line or split per line.
+- **M2.** The inverse drift is linted too: a definition declaring `#m/multi`
+  with only one bound segment (MULTI-STALE, warn, §11) means an edit
+  probably lost a segment — the echoes name what is missing (repair: §8.3).
+  Zero bound refs is ORPHAN's territory, so M2 fires at exactly one bound
+  segment.
+- **M3.** Degradation is honest, not perfect: GitHub and markdown-it render
   one note with multiple backrefs; pandoc duplicates the note body per
   segment (lossless, cosmetically redundant — verified). Obsidian's own
   same-label multi-ref rendering is on the live-vault checklist (Appendix C).
@@ -539,6 +567,16 @@ Two asymmetric failure modes:
   is truth, position at most a tie-breaker) → offer re-anchor on a unique
   hit, ask on multiple, and on none, **park** the annotation under a visible
   `## Orphaned marginalia` heading (§8.2 form) so it is human-visible again.
+- **Partially-lost multis** (a `#m/multi` definition with fewer bound
+  segments than echoes — surfaced by MULTI-STALE and ECHO-COUNT, §7.3 M2):
+  an echo with no matching current segment marks one lost segment. Repair
+  runs the same pipeline per segment — exact echo match → whitespace-
+  normalized match → bounded fuzzy — re-wrapping `==…==` and re-attaching
+  the shared label on a unique hit, asking on multiple; on none, the echo is
+  **retained in the thread and reported**, never silently dropped, so the
+  loss stays visible. Only an explicit accept-the-loss removes a dead echo;
+  a repair that ends with one bound segment drops `#m/multi` with it (a
+  one-segment multi is just a highlight, and M2 would keep warning).
 
 ---
 
@@ -601,11 +639,15 @@ conditions are precisely the ones under which stripping would leak private
 text.
 
 What the linter actually checks: E1, E2, E3, E6/LAZY, T1 (+bullets), Q1
-(stacks and mixed forms), L1 (label grammar), L3, L4, NEAR-MISS, M1,
-ECHO-COUNT, STALE, H3, DEF-INDENT, BIND-SPACE/BIND-PUNCT, ORPHAN, DANGLING.
-Not machine-checkable: H1/H2 (a broken highlight is just literal text to a
-parser), E4 misattribution (a hint by design), and the §10 toolchain
-discipline — those remain your habits, not the linter's.
+(stacks and mixed forms), L1 (label grammar), L3, L4, NEAR-MISS, M1 (error),
+M2/MULTI-STALE (warn — fires at exactly one bound segment; zero refs is
+ORPHAN's), ECHO-COUNT (warn — gated on echoes present, §6.5), STALE (with
+the §6.5 set-match suppression), H3, H4-WRAP (warn, heuristic — a probable
+highlight wrapped across a line break), DEF-INDENT, BIND-SPACE/BIND-PUNCT,
+ORPHAN, DANGLING. Not machine-checkable: H1/H2 (a broken highlight is just
+literal text to a parser — though H4-WRAP heuristically catches the
+line-wrapped case), E4 misattribution (a hint by design), and the §10
+toolchain discipline — those remain your habits, not the linter's.
 
 Two grep patterns are blessed as **lossy helpers** — quick vault-wide
 discovery, nothing more:
@@ -737,7 +779,11 @@ The complete list of MUSTs whose violation causes verified damage:
    (Pandoc lazy-join leaks annotations into prose; renderers absorb
    trailing prose into the footnote.)
 7. **H1/H2** — highlights never cross blank lines or half-overlap spans.
-8. **M1** — shared labels require `#m/multi`.
+   (Companion warn: H4-WRAP heuristically flags a highlight wrapped across
+   a soft line break — legal markdown, invisible to line-based tooling.)
+8. **M1** — shared labels require `#m/multi` (lint: error). (Companion
+   warn: M2/MULTI-STALE — a declared `#m/multi` down to one bound segment,
+   the lost-segment drift M1 cannot see.)
 9. **§10** — disable Linter footnote re-indexing; never pandoc-round-trip
    sources; never Prettier `--prose-wrap always`; strip before publishing.
 10. **H5/§11** — extraction ignores code regions (fenced, inline, and

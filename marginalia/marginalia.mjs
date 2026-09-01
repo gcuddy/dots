@@ -228,6 +228,31 @@ export function parse(input, opts = {}) {
   maskedLines = maskIndentedCode(maskedLines, defLineSet);
   masked = maskedLines.join('\n');
 
+  // ---- H4-WRAP (heuristic): a probable ==highlight== wrapped across a soft
+  // line break inside one paragraph block — legal markdown that renders in
+  // mark-capable renderers but is invisible to this line-scoped grammar (H4),
+  // so it silently misses lint/extract/strip/flatten/wadm. Conservative
+  // detection on masked text (code/frontmatter already \x00-ed): a line whose
+  // `==` token count is odd, followed before the block ends by another
+  // odd-count line. Balanced same-line highlights count even; definition
+  // blocks are exempt; a rare prose `a == b` split over two lines is an
+  // accepted warn-level false positive.
+  {
+    const oddEq = (l) => ((l.match(/==/g) || []).length % 2) === 1;
+    for (let i = 0; i < maskedLines.length; i++) {
+      if (defLineSet.has(i) || maskedLines[i].trim() === '' || !oddEq(maskedLines[i])) continue;
+      for (let j = i + 1; j < maskedLines.length; j++) {
+        if (defLineSet.has(j) || maskedLines[j].trim() === '' || isBlockStart(maskedLines[j])) { i = j; break; }
+        if (oddEq(maskedLines[j])) {
+          lint('H4-WRAP', 'warn', i + 1,
+            `possible highlight spanning a line break — Marginalia highlights are single-line (H4); ` +
+            `close == on the same line or split per line`);
+          i = j; break;
+        }
+      }
+    }
+  }
+
   // ---- near-miss labels: claimed by the namespace, invisible to the grammar ----
   let nm;
   while ((nm = NEARMISS_RE.exec(masked)) !== null) {
@@ -340,11 +365,27 @@ export function parse(input, opts = {}) {
       lint('M1', 'error', def.line,
         `label [^${label}] bound to ${segments.length} highlights without #m/multi — ` +
         `accidental label reuse, or declare it multi-segment`);
+    // M2 / MULTI-STALE — the inverse of M1: declared #m/multi but the
+    // segments are gone. Fires only when the label is not orphaned (ORPHAN
+    // already covers the zero-ref case), i.e. in practice at exactly one
+    // bound segment: an edit lost a segment, and the echoes say which (§8.3).
+    if (allTags.includes('#m/multi') && bound.length > 0 && segments.length <= 1)
+      lint('MULTI-STALE', 'warn', def.line,
+        `[^${label}] #m/multi but only ${segments.length} bound segment(s) — a segment may have been lost (see echoes)`);
     if (allTags.includes('#m/multi') && echoes.length && echoes.length !== segments.length)
       lint('ECHO-COUNT', 'warn', def.line,
         `[^${label}] has ${segments.length} segment(s) but ${echoes.length} echo(es) — one echo per segment, in order`);
+    // Staleness: positional pairing is primary; a positional mismatch is
+    // suppressed when the texts still match as a set (§6.5) — a lost segment
+    // shifts survivors' positions, and pure positional comparison would flag
+    // a byte-identical survivor as edited. Loss stays ECHO-COUNT's signal.
+    const nEchoes = echoes.map(norm);
+    const nSegs = segments.map((s) => norm(s.highlight.text));
     const stale = echoes.length > 0 && segments.length > 0 &&
-      segments.some((s, ix) => echoes[ix] !== undefined && norm(s.highlight.text) !== norm(echoes[ix]));
+      segments.some((s, ix) => {
+        if (echoes[ix] === undefined || nSegs[ix] === nEchoes[ix]) return false;
+        return !nEchoes.includes(nSegs[ix]) && !nSegs.includes(nEchoes[ix]);
+      });
     if (stale)
       lint('STALE', 'info', def.line,
         `[^${label}] echo no longer matches the highlighted text — the highlight was edited after annotation`);
