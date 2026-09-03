@@ -2,7 +2,7 @@
 
 **A plain-text convention for annotating highlights in Obsidian-flavored Markdown.**
 
-Version 1.0-rc3 · 2026-09-02 · License: CC0
+Version 1.0-rc4 · 2026-09-03 · License: CC0
 
 ```markdown
 The ==map is not the territory==[^m-7f3k] as Korzybski said.
@@ -430,7 +430,7 @@ natively) that stay quarantined from your content taxonomy (bare `#q`,
 | `#m/open` / `#m/resolved` | **status** — absence = open; the *last* occurrence across definition + thread wins, so a reply after resolution doesn't silently reopen, and an explicit `#m/open` in a later reply does |
 | `#m/hl/yellow` `#m/hl/red` … | **highlight color/kind** — a tool styles the `==mark==` from its annotation's tag, so color survives as a readable word, not syntax (the Highlightr lesson: 709k installs of inline `<mark style>` debris, now unmaintained) |
 | `#m/multi` | declared multi-segment highlight (§7.3) |
-| `#m/page` | **scope** — the definition is a page note about the whole document (§7.5); read from the head entry only, replies never set scope |
+| `#m/page` | **scope** — the definition is a page note about the whole document (§7.5 Form A; the section form needs no tag); read from the head entry only, replies never set scope |
 | `#m/sync/rw-884213` | **machine key** convention for importers (Readwise-class) — readable, greppable, native |
 
 ### 6.7 Full grammar
@@ -527,8 +527,17 @@ expect failure on a definition carrying an indented thread.
 ### 7.5 Page notes
 
 A **page note** is a note about the document as a whole — the verdict on a
-source, a summary, a to-do for the whole file. It is an ordinary labeled
-annotation whose **head entry carries the reserved scope tag `#m/page`**:
+source, a summary, a to-do for the whole file. It comes in two forms, and
+tools read both. **Form A**, the default, is an ordinary labeled annotation
+whose **head entry carries the reserved scope tag `#m/page`** — it rides
+every mechanism already here (hover preview, threads, status, strip, flatten,
+export) for the price of one tag and one marker line. **Form B** keeps the
+same entries as list items under a reserved `## Page notes` heading — the
+one construct in this spec that is not a footnote — for readers who want page
+notes in plain sight at the top of the file, in every renderer, at the price
+of the hover preview and of one heading text they may no longer use for prose.
+
+**Form A — the footnote page note**
 
 ```markdown
 ---
@@ -560,8 +569,9 @@ builds everything on that image.
   whose definition carries `#m/page` as a page note wherever it sits.
 - **P2. The marker line.** Page-note refs live on a line of their own — the
   **marker line** — the first non-blank body line after frontmatter (a
-  leading `%%…%%` comment block is skipped; an unterminated `%%` is body,
-  not a skipped block). Several page notes share it,
+  leading `%%…%%` comment block is skipped, and so is a leading page-notes
+  section, P11; an unterminated `%%` is body, not a skipped block). Several
+  page notes share it,
   `[^m-pg7k][^m-pgq2]`; document order = display order. The marker MUST NOT
   sit in a heading line (§7.2) and MUST NOT follow a highlight on its line
   (it would bind, §5.1 rule 2). Placement is linted, never a parse
@@ -582,7 +592,10 @@ builds everything on that image.
 - **P5. Facts are properties, not page notes.** Rating, status, source,
   dates, description: frontmatter properties, outside this format (H5).
   Marginalia never reads, writes, or displays them. A page note is prose
-  *about* the document.
+  *about* the document. A tool MAY keep one plain, untimestamped note in a
+  frontmatter property (a single string — no speaker, date, type, thread, or
+  status); that is a property too, outside this format: it publishes with
+  the file, and `strip` never touches properties.
 - **P6. Definition placement.** A page-note definition goes directly under
   the marker line, a blank line between (E6), *always* — the one exception
   to E7's scatter rule — so Reading view cards it under the title and a
@@ -592,6 +605,67 @@ builds everything on that image.
   (4+ spaces or a tab), the definition goes *after* that run — placed
   directly above it, every renderer would absorb the block as continuation
   of the note, and `strip` would delete the reader's own text with it.
+
+**Form B — the page-notes section**
+
+```markdown
+---
+status: read
+---
+## Page notes
+
+- gus (2026-09-01): Finish the Popper chapter before the seminar. #m/todo
+  - gus (2026-09-03): Done — best chapter in the book. #m/resolved
+- claude (2026-09-01): Rare, high-impact events dominate history, and narrative blinds us to them — that is the whole argument.
+
+  The second half turns the same lens on finance; the epilogue is mostly a rebuttal of early critics.
+
+# The Black Swan — reading notes
+```
+
+- **P7. The reserved heading.** A heading of any level whose text is
+  `Page notes` (trimmed, case-insensitive) opens the **page-notes section**,
+  which runs to the next heading of *any* level, a marker line (P2), a
+  footnote definition, or the end of the file. The text is reserved the way
+  `## Archived marginalia` and `## Orphaned marginalia` are (§8.2): never
+  title prose with it — `strip` removes the section whole. Tools MAY be
+  configured to recognize a different text (the reference CLI takes
+  `--page-heading <text>`); the default is normative so that unconfigured
+  tools agree on what a file says. One section per file: a second one is
+  read but linted (PAGE-SECTION, warn), and so is a definition that ends the
+  section early — the items below it are prose.
+- **P8. Items.** The section holds only top-level list items — `- ` at
+  column 0 — and each item is one page note. Its first line is the entry
+  head (§6.3 grammar; E1 does not apply — a list item cannot parse as a link
+  reference). Nested `- ` items indented to the content column (2 spaces; 4
+  accepted, any deeper indent captured) are its thread replies (§6.4:
+  status, `#m/resolved`, last-tag-wins, all as usual); further paragraphs
+  indented to the content column are its continuation (E5's shape at the
+  list's indent). `*`/`+` bullets are captured with the T-BULLET warning, as
+  in threads. Anything else in the section — a bare paragraph, a fence at
+  column 0, a lazily unindented line, a bullet indented one space — is
+  linted PAGE-SECTION (warn) and ignored by the model; `strip` still takes
+  it with the section, so nothing leaks.
+- **P9. No label, no ref, no echo, no tag.** A section note has no footnote
+  machinery: nothing to reference, nothing to orphan, nothing to snapshot (a
+  `- echo:` reply lints PAGE-ECHO, as in Form A). `#m/page` is not required
+  — scope comes from the section — and harmless when present; the head's
+  first non-reserved tag is the type, as always.
+- **P10. Synthetic identity.** Tools address a section note as `page-<n>`,
+  n its 1-based position among the section's items in document order. Every
+  conforming parser synthesizes the same label and **none ever writes it to
+  the file**; it is an address, not an identity (§9) — an item inserted
+  above renumbers everything below. `extract` shows a section note as
+  `(page)` like any page note; the WADM export (§12) targets the whole
+  resource under the id `<path>#page-<n>`.
+- **P11. Coexistence.** Both forms may live in one file. A section at the
+  top of the file is skipped when locating the marker line — hence P2's
+  definition — so Form A refs sit directly under the section and their
+  definitions under the refs (P6); a section anywhere else is just a
+  section. `strip` removes the section, heading and items (it is annotation
+  machinery, private by default like every definition); `flatten` leaves it
+  exactly where it is — already flat, already readable — and gathers only
+  Form A notes into `## Marginalia`. Archive and delete follow §8.2.
 
 ---
 
@@ -626,9 +700,11 @@ Only ever explicit, never automatic:
   Archived material renders everywhere, because — hard-won honesty — an
   *unreferenced footnote definition is silently omitted from rendered output
   by every footnote-aware renderer* (verified). Bare footnote definitions
-  are never an archive format.
+  are never an archive format. A page note archives the same way minus the
+  quote line (§7.5 P3); a section note (§7.5 Form B) has no ref to remove —
+  its item, replies and all, leaves the section for the blockquote.
 - **Delete** = remove ref AND definition, always as a pair, always
-  confirmed.
+  confirmed (for a section note: the item with its replies).
 
 ### 8.3 Orphans (the honest section)
 
@@ -661,7 +737,8 @@ Two asymmetric failure modes:
   pipeline: there is no quote to search for and only one place the ref can
   go, so the repair is mechanical — re-insert the ref on the marker line.
   ORPHAN reports them *fixable* and `fix` does exactly that; they are never
-  echo-searched and never parked.
+  echo-searched and never parked. A section note (§7.5 Form B) has no ref
+  and cannot orphan.
 
 ---
 
@@ -674,10 +751,14 @@ For machine writers (Readwise-class importers, dedupe tools, agents):
   the TextQuoteSelector this spec exports anyway). Bare quote-as-identity is
   known-insufficient: the same phrase highlighted in chapter 1 and chapter 9
   must remain two annotations (the attack that killed the naive rule).
-- **Page notes** (§7.5) have *label* identity only — no quote, no context,
-  nothing to match. An imported non-reply annotation whose target carries no
-  selector (a Hypothesis Page Note, a WADM whole-resource target) becomes a
-  page note — never an orphan, never parked.
+- **Page notes** (§7.5) have *label* identity only in Form A — no quote, no
+  context, nothing to match. A **section note** (Form B) has no label at
+  all: its identity is the entry key (speaker, stamp, body) or a
+  `#m/sync/…` key it carries; the synthetic `page-<n>` address is never an
+  identity (it renumbers on every insertion above it). An imported non-reply
+  annotation whose target carries no selector (a Hypothesis Page Note, a
+  WADM whole-resource target) becomes a page note — never an orphan, never
+  parked.
 - **Merge rule:** an incoming highlight matching an existing annotated
   quote+context merges instead of duplicating; **the copy carrying human
   commentary always wins**; machine metadata merges in; entries dedup by
@@ -722,12 +803,16 @@ node marginalia.mjs flatten notes.md     # refs out, annotations to '## Marginal
 node marginalia.mjs wadm    notes.md     # W3C Web Annotation JSON-LD export
 ```
 
+Every command takes `--page-heading <text>` to recognize a page-notes section
+(§7.5 Form B) under a configured heading instead of the reserved `Page notes`.
+
 `strip` and `flatten` — the publish-safety commands — **refuse to run** while
 error-severity lints are present (`--force` overrides), because several error
 conditions are precisely the ones under which stripping would leak private
 text. `extract` prints one line per annotation with its anchor kind: the
-quoted highlight(s), `(point)`, `(page)` for a page note (§7.5), or
-`(unanchored)` for an orphan.
+quoted highlight(s), `(point)`, `(page)` for a page note in either form
+(§7.5 — a section note is listed as `page-<n>`), or `(unanchored)` for an
+orphan.
 
 What the linter actually checks: E1, E2, E3, E6/LAZY, T1 (+bullets), Q1
 (stacks and mixed forms), L1 (label grammar), L3, L4, NEAR-MISS, M1 (error),
@@ -738,7 +823,10 @@ highlight wrapped across a line break), DEF-INDENT, BIND-SPACE/BIND-PUNCT,
 ORPHAN (fixable for a page note — its ref goes back on the marker line,
 §7.5), DANGLING, PAGE-PLACE (info, fixable — a page-note ref off the marker
 line), PAGE-BIND (warn, fixable — a `#m/page` label bound to a highlight),
-PAGE-ECHO (warn — echoes on a page note). Not machine-checkable: H1/H2 (a
+PAGE-ECHO (warn — echoes on a page note, either form), PAGE-SECTION (warn —
+a page-notes section holding something that is not an item, a second
+section, or a definition cutting the section short; §7.5 P7–P8). Not
+machine-checkable: H1/H2 (a
 broken highlight is just literal text to a parser — though H4-WRAP
 heuristically catches the line-wrapped case), E4 misattribution (a hint by
 design), and the §10 toolchain discipline — those remain your habits, not
@@ -754,7 +842,8 @@ discovery, nothing more:
 
 Stated caveats (why they are lossy, verified): they match inside code fences
 and inline code (real parsers must mask code regions first — §3 H5); they see
-neither thread structure nor binding nor echoes. Every "two regexes extract
+neither thread structure nor binding nor echoes; and they never see a
+section-form page note (§7.5 Form B), which has no ref at all. Every "two regexes extract
 everything" claim across four candidate designs failed adversarial review;
 this spec stopped making it.
 
@@ -794,7 +883,9 @@ annotation, plus one per bare highlight):
 - A **page note** (§7.5) targets the whole resource: `target` is
   `[{ source }]` with no selector — the WADM whole-resource target, and the
   shape Hypothesis gives its Page Notes. An orphaned page note keeps
-  `marginalia:orphan`.
+  `marginalia:orphan`. A section note (Form B) exports under the id
+  `<path>#page-<n>` — its synthetic address, P10 — with the same target; it
+  can never be an orphan.
 - A **point annotation** exports a `TextPositionSelector` whose `start` and
   `end` are offsets into the same anchoring stream the quote context uses —
   never raw source offsets, which count machinery the consumer's copy does
@@ -869,13 +960,16 @@ Each rejection below was tested, not assumed.
   as the same selector-less target (§12). Readwise's alternative, one
   overwritable `document_note` string per source, was rejected: one slot, no
   author, no date, no thread, and regeneration on import overwrites it. Why
-  not a `## Notes` section, a callout, or a frontmatter property: a section
-  or callout is prose the publish path (`strip`/`flatten`) cannot tell from
-  the document, so it can neither hide nor gather it; a property is a *fact*
-  (rating, status — P5), and YAML has no highlights, no threads, no
-  tags-as-metadata. A footnote with one reserved scope tag rides every
-  mechanism already here — hover preview, threads, status, strip, flatten,
-  export — for the price of one tag and one marker line.
+  not a `## Notes` section, a callout, or a frontmatter property: an
+  *unreserved* section or callout is prose the publish path
+  (`strip`/`flatten`) cannot tell from the document, so it can neither hide
+  nor gather it — which is exactly why Form B (§7.5) reserves one heading
+  text and nothing else; a property is a *fact* (rating, status — P5), and
+  YAML has no highlights, no threads, no tags-as-metadata. A footnote with
+  one reserved scope tag rides every mechanism already here — hover preview,
+  threads, status, strip, flatten, export — for the price of one tag and one
+  marker line; the section form trades the hover preview for a note that
+  reads at the top of the file in every renderer.
 
 ---
 
@@ -913,6 +1007,9 @@ The complete list of MUSTs whose violation causes verified damage:
     heading; a page note goes on the marker line. (A ref in a heading changes
     the heading's Obsidian link key and pandoc's auto-id — `[[Note#Heading]]`
     stops resolving.)
+12. **§7.5 P7** — the heading text `Page notes` is reserved: a heading with
+    it opens a page-notes section that `strip` deletes whole. Never title
+    prose with it; configure the tool (`--page-heading`) if you must.
 
 ## Appendix B — Collected grammar (ABNF-ish)
 
@@ -959,7 +1056,24 @@ tag          = "#m/" 1*( ALPHA / DIGIT / "/" / "-" )
 block-anchor = SP "^" label                      ; end of prose paragraph only
 marker-line  = *3SP 1*( ref *WSP )                ; page-note refs (§7.5): the
                                                  ;   first non-blank body line
-                                                 ;   after frontmatter
+                                                 ;   after frontmatter, a
+                                                 ;   leading %% block, and a
+                                                 ;   leading page-section
+page-section = page-heading *( LF [ page-item ] ) ; §7.5 Form B; ends at the
+                                                 ;   next heading of any level,
+                                                 ;   a marker-line, a
+                                                 ;   definition, or EOF
+page-heading = 1*6"#" SP "Page notes"            ; reserved text, trimmed and
+                                                 ;   case-insensitive; tools
+                                                 ;   MAY be configured to
+                                                 ;   accept another text
+page-item    = "- " entry *( LF page-reply ) *( LF page-cont )
+                                                 ; column 0; no label, no ref,
+                                                 ;   no echo; accepted: "*"/"+"
+                                                 ;   bullets (lint)
+page-reply   = 2SP "- " entry                    ; canonical; 4SP accepted
+page-cont    = LF 2SP block                      ; continuation at the item's
+                                                 ;   content column
 ```
 
 ## Appendix C — Live-vault verification checklist (the 1.0 gate)

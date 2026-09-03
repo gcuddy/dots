@@ -28,6 +28,13 @@ The ==map is not the territory==[^m-7f3k] as Korzybski said.
 - A ref with no adjacent highlight is a point annotation (a margin note on
   that location). Several highlights sharing one label + `#m/multi` = one
   discontinuous highlight.
+- A page note (about the whole document) is either a definition tagged
+  `#m/page` whose ref sits on the marker line (the first body line), or an
+  item under a `## Page notes` heading — that heading text is reserved: its
+  `- ` items are page notes (`- speaker (date): body #m/tags`, replies as
+  nested `  - ` items), with no label and no ref. Tools address them as
+  `page-1`, `page-2`, … in section order; those names never appear in the
+  file.
 - `==x==^[quick note]` is a valid lightweight annotation (Level 1).
 
 Quick lossy discovery (misses structure, false-positives inside code blocks):
@@ -36,6 +43,9 @@ Quick lossy discovery (misses structure, false-positives inside code blocks):
 grep -n '\[\^m-'  file.md     # refs and definitions
 grep -n '^\[\^m-' file.md     # definitions only
 ```
+
+Section-form page notes (`- ` items under a `## Page notes` heading, SPEC
+§7.5 Form B) carry no `[^m-` and are invisible to both patterns.
 
 Real extraction — use the reference parser, not regexes:
 
@@ -71,6 +81,16 @@ never put a ref inside a heading line) — and the definition directly
 beneath it, blank line between. Put `#m/page` on the head entry only, and
 write no `- echo:` item. Several page notes share the one marker line.
 
+The second way to write a page note — for a file that keeps (or wants) a
+**page-notes section**: a heading with the reserved text `## Page notes`
+(any level) directly after frontmatter, holding nothing but `- ` items at
+column 0. Append one item per note, same head grammar
+(`- yourname (YYYY-MM-DD): the note #m/todo`); replies are nested `  - `
+items (2 spaces), continuation paragraphs are indented 2 spaces; no label,
+no ref, no `#m/page` needed. Never put anything else in that section, and
+never write the `page-<n>` names into the file. Use whichever form the file
+already uses; when both exist, the marker line goes *under* the section.
+
 To reply to an existing annotation, append a thread item under its
 definition, indented **exactly 4 spaces**:
 
@@ -105,6 +125,8 @@ anything.
    obstacle; fix the errors.)
 8. Never run a footnote-renumbering formatter, `pandoc -t markdown`, or
    Prettier `--prose-wrap always` over source files.
+9. Never title a prose section `Page notes` — the text is reserved for the
+   page-notes section, which `strip` deletes whole.
 
 Run `node marginalia.mjs lint file.md` after writing; fix every `error` and
 `warn` (mechanical ones: `node marginalia.mjs fix file.md`).

@@ -2,7 +2,9 @@
 // test.mjs — regression tests for marginalia.mjs. Every case here encodes a
 // defect found during adversarial review; run `node test.mjs` (exit 0 = pass).
 import { readFileSync } from 'node:fs';
-import { parse, strip, flatten, wadm, fix } from './marginalia.mjs';
+import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { parse, strip, flatten, wadm, fix, extract, PAGE_HEADING } from './marginalia.mjs';
 
 let failures = 0;
 const t = (name, cond, extra = '') => {
@@ -368,6 +370,116 @@ const hasLint = (m, rule, sev) => m.lints.some((l) => l.rule === rule && (!sev |
     fixed === '[^m-pg]\n\n%%\nnever closes\n# T\n\n[^m-pg]: gus: x y #m/page\n', JSON.stringify(fixed));
   t('marker: fixed unterminated-%% doc is clean', parse(fixed).lints.length === 0, JSON.stringify(parse(fixed).lints));
   t('marker: 4-space-indented ref line is not a marker (indented code)', !parse('    [^m-pg]\n\n[^m-pg]: gus: x y #m/page\n').marker.present);
+}
+
+// --- page notes, section form (§7.5 Form B): items, replies, continuation --
+{
+  const doc = '---\nx: 1\n---\n\n## Page notes\n\n- gus (2026-09-01): Finish the Popper chapter. #m/todo\n  - gus (2026-09-03): Done. #m/resolved\n- claude (2026-09-01): The whole argument in one line. #m/page\n\n  Second paragraph of the second note.\n\n# Title\n\nProse ==hl==[^m-a] here.\n\n[^m-a]: gus: a body note #m/q\n';
+  const m = parse(doc);
+  const secs = m.annotations.filter((a) => a.form === 'section');
+  t('section: two items, synthetic labels in order', secs.map((a) => a.label).join(',') === 'page-1,page-2', JSON.stringify(secs.map((a) => a.label)));
+  t('section: page flag set with #m/page absent or present alike', secs.every((a) => a.page === true));
+  t('section: #m/page never the type; type from the head', secs[0].type === '#m/todo' && secs[1].type === null);
+  t('section: head parsed', secs[0].head.speaker === 'gus' && secs[0].head.stamp === '2026-09-01');
+  t('section: reply captured at 2-space indent', secs[0].thread.length === 1 && secs[0].thread[0].body === 'Done. #m/resolved', JSON.stringify(secs[0].thread));
+  t('section: #m/resolved reply resolves', secs[0].status === 'resolved' && secs[1].status === 'open');
+  t('section: continuation captured', secs[1].continuation.join('|') === 'Second paragraph of the second note.', JSON.stringify(secs[1].continuation));
+  t('section: never orphaned, bound, multi, or stale', secs.every((a) => a.orphan === false && a.targets.length === 0 && a.stale === false && a.multi === false));
+  t('section: lint-clean', m.lints.length === 0, JSON.stringify(m.lints));
+  t('section: ordinary annotation carries form footnote', m.annotations.find((a) => a.label === 'm-a').form === 'footnote');
+  t('section: model exposes the extent', m.pageSections.length === 1 && m.pageSections[0].startLine === 5 && m.pageSections[0].endLine === 12 && m.pageSections[0].items === 2, JSON.stringify(m.pageSections));
+  t('section: annotations in document order', m.annotations.map((a) => a.label).join(',') === 'page-1,page-2,m-a');
+  const ex = extract(m);
+  t('section-extract: (page) kind with the synthetic label', ex[0] === '[resolved #m/todo] page-1 (page)' && ex[3] === '[open] page-2 (page)', JSON.stringify(ex));
+  t('section-extract: entries, reply, continuation follow', ex[1] === '  gus (2026-09-01): Finish the Popper chapter. #m/todo' && ex[2] === '    - gus (2026-09-03): Done. #m/resolved' && ex[5] === '  Second paragraph of the second note.', JSON.stringify(ex));
+  t('section-extract: ordinary kinds unchanged', ex[6] === '[open #m/q] m-a "hl"');
+  const s = strip(m);
+  t('section-strip: whole section removed, heading included', s === '---\nx: 1\n---\n\n# Title\n\nProse ==hl== here.\n', JSON.stringify(s));
+  const fl = flatten(m);
+  t('section-flatten: section left in place unchanged', fl.startsWith(doc.slice(0, doc.indexOf('# Title'))), JSON.stringify(fl));
+  t('section-flatten: section notes not gathered into ## Marginalia', !fl.slice(fl.indexOf('## Marginalia')).includes('Popper'), JSON.stringify(fl));
+  const w = wadm(m, 'file:t.md');
+  const w1 = w.find((a) => a.id === 'file:t.md#page-1');
+  t('section-wadm: id <path>#page-<n>, whole-resource target, status', !!w1 && JSON.stringify(w1.target) === '[{"source":"file:t.md"}]' && w1['marginalia:status'] === 'resolved', JSON.stringify(w1));
+  t('section-wadm: reply and continuation as bodies', w1.body.length === 2 && w.find((a) => a.id === 'file:t.md#page-2').body[0].value === 'The whole argument in one line. #m/page\nSecond paragraph of the second note.');
+}
+
+// --- section form: PAGE-SECTION, bullets, echoes, heading variants ---------
+{
+  const bad = '## Page notes\n\n- gus: a fine item here\n\nA stray paragraph\nthat runs two lines\n\n- gus: another item\n * one-space bullet\n';
+  const mb = parse(bad);
+  t('page-section: non-item content warns once per run, is ignored', mb.lints.filter((l) => l.rule === 'PAGE-SECTION').length === 2 && mb.annotations.length === 2, JSON.stringify(mb.lints));
+  t('page-section: not fixable', mb.lints.every((l) => l.rule !== 'PAGE-SECTION' || !l.fixable));
+  t('page-section: stray text is neither reply nor continuation', mb.annotations.every((a) => a.thread.length === 0 && a.continuation.length === 0));
+  const lazy = parse('## Page notes\n\n- gus: item head here\nlazy unindented line\n');
+  t('page-section: lazy line lints, ignored', hasLint(lazy, 'PAGE-SECTION', 'warn') && lazy.annotations[0].continuation.length === 0);
+  const star = '## Page notes\n\n* gus: star item here\n  * claude: star reply\n';
+  const ms = parse(star);
+  t('page-section: * bullets captured with T-BULLET', ms.annotations.length === 1 && ms.annotations[0].thread.length === 1 && ms.lints.filter((l) => l.rule === 'T-BULLET').length === 2, JSON.stringify(ms.lints));
+  t('page-section: fix normalizes bullets, keeps the reply indent', fix(star) === '## Page notes\n\n- gus: star item here\n  - claude: star reply\n', JSON.stringify(fix(star)));
+  const me = parse('## Page notes\n\n- gus: item here\n  - echo: some text\n');
+  t('page-section: echo reply warns PAGE-ECHO, excluded from the thread', hasLint(me, 'PAGE-ECHO', 'warn') && me.annotations[0].thread.length === 0 && me.annotations[0].echoes.length === 1);
+  t('page-section: level-1 heading opens a section', parse('# Page notes\n\n- gus: item one here\n').annotations[0]?.form === 'section');
+  t('page-section: level-3 heading opens a section', parse('### Page notes\n\n- gus: item one here\n').annotations[0]?.form === 'section');
+  t('page-section: case-insensitive, closing hashes, trailing space', parse('## PAGE NOTES ## \n\n- gus: item one here\n').annotations[0]?.form === 'section');
+  t('page-section: other heading text is prose', parse('## Page note\n\n- gus: item one here\n').annotations.length === 0);
+  t('page-section: heading inside a fence is not a section', parse('```\n## Page notes\n```\n\n- gus: not an item\n').annotations.length === 0);
+  const empty = parse('Prose.\n\n## Page notes\n');
+  t('page-section: empty section parses; strip removes the heading', empty.annotations.length === 0 && empty.pageSections.length === 1 && strip(empty) === 'Prose.\n', JSON.stringify(strip(empty)));
+  const two = parse('## Page notes\n\n- gus: first item here\n\n## Page notes\n\n- gus: second item here\n');
+  t('page-section: second section warns, numbering continues', hasLint(two, 'PAGE-SECTION', 'warn') && two.annotations.map((a) => a.label).join(',') === 'page-1,page-2', JSON.stringify(two.lints));
+  const known = parse('## Page notes\n\n- Note: check this later\n- gus: known speaker here\n', { knownSpeakers: ['gus'] });
+  t('page-section: head-parse confidence as usual', known.annotations[0].head.headConfidence === 'hint' && known.annotations[1].head.headConfidence === 'high');
+  t('page-section: hint speaker not exported as creator', !('creator' in wadm(known)[0].body[0]) && wadm(known)[1].body[0].creator === 'gus');
+  t('page-section: tab-indented reply captured', parse('## Page notes\n\n- gus: item here\n\t- claude: tab reply\n').annotations[0].thread.length === 1);
+}
+
+// --- section form: coexistence with the marker line, fix placement ---------
+{
+  const both = '---\nx: 1\n---\n## Page notes\n\n- gus: section note here\n\n[^m-pg]\n\n[^m-pg]: gus: footnote page note #m/page\n\n# Title\n';
+  const m = parse(both);
+  t('coexist: section ends at the marker line', m.pageSections[0].endLine === 7 && m.pageSections[0].items === 1, JSON.stringify(m.pageSections));
+  t('coexist: marker line found after the section', m.marker.line === 8 && m.marker.present === true, JSON.stringify(m.marker));
+  t('coexist: no PAGE-PLACE, no lints at all', m.lints.length === 0, JSON.stringify(m.lints));
+  t('coexist: both are page notes, forms differ', m.annotations.map((a) => `${a.label}:${a.form}`).join(',') === 'page-1:section,m-pg:footnote');
+  t('coexist: fix is a no-op', fix(both) === both, JSON.stringify(fix(both)));
+  t('coexist: fix never writes a synthetic label', !/page-\d/.test(fix(both)) && !/page-\d/.test(fix('## Page notes\n\n- gus: only a section note\n')));
+  const orphan = '---\nx: 1\n---\n## Page notes\n\n- gus: section note here\n\n# Title\n\n[^m-pg]: gus: footnote page note #m/page\n';
+  const fo = fix(orphan);
+  t('coexist: orphan fix inserts the marker after the section', fo === '---\nx: 1\n---\n## Page notes\n\n- gus: section note here\n\n[^m-pg]\n\n# Title\n\n[^m-pg]: gus: footnote page note #m/page\n', JSON.stringify(fo));
+  t('coexist: fixed file is clean', parse(fo).lints.length === 0, JSON.stringify(parse(fo).lints));
+  const defCut = '## Page notes\n\n- gus: section note here\n\n[^m-pg]: gus: footnote page note #m/page\n\n- gus: now prose, not a page note\n';
+  const md = parse(defCut);
+  t('coexist: a definition ends the section — linted, items below are prose', hasLint(md, 'PAGE-SECTION', 'warn') && md.annotations.filter((a) => a.form === 'section').length === 1, JSON.stringify(md.lints));
+  const fd = fix(defCut);
+  t('coexist: fix puts the marker between section and definition', fd === '## Page notes\n\n- gus: section note here\n\n[^m-pg]\n\n[^m-pg]: gus: footnote page note #m/page\n\n- gus: now prose, not a page note\n', JSON.stringify(fd));
+  const bottom = '[^m-pg]\n\n[^m-pg]: gus: footnote page note #m/page\n\n# Title\n\nProse.\n\n## Page notes\n\n- gus: section note at the bottom\n';
+  const mb = parse(bottom);
+  t('bottom: section at the end parses; marker line untouched', mb.marker.line === 1 && mb.marker.present && mb.lints.length === 0 && mb.annotations.some((a) => a.form === 'section'), JSON.stringify(mb.lints));
+  t('bottom: strip removes it with no trailing debris', strip(mb) === '# Title\n\nProse.\n', JSON.stringify(strip(mb)));
+  t('bottom: flatten keeps it and gathers only the footnote page note', flatten(mb).includes('## Page notes\n\n- gus: section note at the bottom\n') && flatten(mb).includes('## Marginalia\n\n> — gus: footnote page note #m/page'), JSON.stringify(flatten(mb)));
+  const comment = '%% leading comment %%\n\n## Page notes\n\n- gus: section note here\n\n# Title\n\n[^m-pg]: gus: page note here #m/page\n';
+  t('coexist: %% block and section both skipped', fix(comment) === '%% leading comment %%\n\n## Page notes\n\n- gus: section note here\n\n[^m-pg]\n\n# Title\n\n[^m-pg]: gus: page note here #m/page\n', JSON.stringify(fix(comment)));
+}
+
+// --- section form: configured heading (API + CLI), example corpora ---------
+{
+  const doc = '## Notes on this file\n\n- gus: item under a configured heading\n\n## Page notes\n\n- gus: item under the reserved heading\n';
+  const m = parse(doc, { pageHeading: 'notes on this file ' });
+  t('page-heading: configured text opens the section', m.annotations.length === 1 && m.annotations[0].form === 'section' && m.annotations[0].head.body === 'item under a configured heading', JSON.stringify(m.annotations));
+  t('page-heading: the reserved text is then ordinary prose', !m.lints.length && strip(m) === '## Page notes\n\n- gus: item under the reserved heading\n', JSON.stringify(strip(m)));
+  t('page-heading: default constant exported', PAGE_HEADING === 'Page notes');
+  const cli = (...a) => execFileSync(process.execPath, [fileURLToPath(new URL('./marginalia.mjs', import.meta.url)), ...a], { encoding: 'utf8' });
+  const ex = fileURLToPath(new URL('./examples/page-notes-section.md', import.meta.url));
+  t('cli: extract lists section notes as page-<n> (page)', cli('extract', ex).startsWith('[resolved #m/todo] page-1 (page)\n'), cli('extract', ex));
+  t('cli: --page-heading changes what counts as the section', !cli('extract', ex, '--page-heading', 'Verdict').includes('page-1'));
+  const pn = parse(readFileSync(ex, 'utf8'));
+  t('examples: page-notes-section is lint-clean', pn.lints.length === 0, JSON.stringify(pn.lints));
+  t('examples: page-notes-section holds both forms, marker under the section', pn.annotations.filter((a) => a.form === 'section').length === 2 && pn.annotations.filter((a) => a.page && a.form === 'footnote').length === 1 && pn.marker.line === 14 && pn.marker.present, JSON.stringify(pn.marker));
+  for (const f of ['reading-notes', 'lint-traps', 'page-notes']) {
+    const c = parse(readFileSync(new URL(`./examples/${f}.md`, import.meta.url), 'utf8'));
+    t(`examples: ${f} has no section, every annotation is form footnote`, c.pageSections.length === 0 && c.annotations.every((a) => a.form === 'footnote'));
+  }
 }
 
 console.log(failures ? `\n${failures} FAILURE(S)` : '\nall tests passed');

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// marginalia.mjs — reference parser + CLI for the Marginalia spec (1.0-rc2).
+// marginalia.mjs — reference parser + CLI for the Marginalia spec (1.0-rc4).
 // Dependency-free, Node >= 18. This file is the normative extractor: the
 // grep patterns in SPEC.md §11 are lossy helpers; this is the contract.
 //
@@ -10,6 +10,9 @@
 //   node marginalia.mjs strip   notes.md        # refuses on error lints (--force)
 //   node marginalia.mjs flatten notes.md        # refuses on error lints (--force)
 //   node marginalia.mjs wadm    notes.md
+//
+// Every command takes --page-heading <text> to recognize a page-notes section
+// (§7.5 Form B) under a configured heading instead of the reserved "Page notes".
 //
 // Exit codes: lint → 1 if any error-severity finding; strip/flatten → 1 when
 // refusing on error lints; others → 0 on success.
@@ -89,17 +92,47 @@ function maskIndentedCode(maskedLines, defLineSet) {
   return maskedLines;
 }
 
+// ----------------------------------------------------------- page section --
+// Page notes, section form (§7.5 Form B): a heading of any level whose text is
+// the reserved PAGE_HEADING (trimmed, case-insensitive; tools may accept a
+// configured text — the CLI's --page-heading) opens a section of top-level
+// "- " items, one page note each. The section runs to the next heading of any
+// level, a marker line, a footnote definition, or EOF. Extents on a line
+// array: { start, end } 0-based, end exclusive (the terminator line).
+export const PAGE_HEADING = 'Page notes';
+const headingKey = (opts) => (opts.pageHeading ?? PAGE_HEADING).trim().toLowerCase();
+function isPageHeading(line, key) {
+  const m = line.match(/^#{1,6}[ \t]+(.*?)[ \t]*$/);
+  return !!m && m[1].replace(/[ \t]+#+$/, '').trim().toLowerCase() === key;
+}
+function pageSections(lines, key) {
+  const out = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (!isPageHeading(lines[i], key)) continue;
+    let j = i + 1;
+    while (j < lines.length && !/^#{1,6}[ \t]/.test(lines[j]) && !MARKER_LINE_RE.test(lines[j]) && !DEF_RE.test(lines[j])) j++;
+    out.push({ start: i, end: j });
+    i = j - 1;
+  }
+  return out;
+}
+
 // ------------------------------------------------------------ marker line --
 // Page notes (§7.5) put their refs on the marker line: the first non-blank
-// body line after frontmatter, skipping a leading %%…%% comment block. Returns
-// its 0-based index (lines.length for an empty body) and whether that line is
-// already a marker — a line consisting only of marginalia refs.
+// body line after frontmatter, skipping a leading %%…%% comment block and a
+// leading page-notes section (P11; `sections` from pageSections over the same
+// lines). Returns its 0-based index (lines.length for an empty body) and
+// whether that line is already a marker — a line consisting only of
+// marginalia refs.
 const MARKER_LINE_RE = new RegExp(`^ {0,3}(?:\\[\\^${LABEL}\\][ \\t]*)+$`); // <=3 leading spaces: 4+ is an indented code block
-function markerLine(lines) {
+function markerLine(lines, sections = []) {
   let i = frontmatterEnd(lines);
   for (;;) {
     while (i < lines.length && lines[i].trim() === '') i++;
-    if (i >= lines.length || !/^[ \t]*%%/.test(lines[i])) break;
+    if (i >= lines.length) break;
+    const sec = sections.find((s) => s.start === i);
+    if (sec) { i = sec.end; continue; } // a leading section is skipped whole, trailing blanks included
+    if (!/^[ \t]*%%/.test(lines[i])) break;
     if (!lines[i].replace(/^[ \t]*%%/, '').includes('%%')) {
       let j = i + 1;
       while (j < lines.length && !lines[j].includes('%%')) j++;
@@ -252,10 +285,68 @@ export function parse(input, opts = {}) {
     i = def.endLine - 1;
   }
 
-  // ---- pass 2: mask indented code outside definition blocks ----
+  // ---- page-notes section (§7.5 Form B): headings and terminators on the
+  // fence-masked lines, items on raw lines. A top-level "- " item is one page
+  // note; nested bullets (indent >= 2) are its replies, other lines indented
+  // to the content column its continuation; anything else is PAGE-SECTION.
+  const sections = pageSections(maskedLines, headingKey(opts));
+  const sectionItems = [];
+  const sectionLineSet = new Set();
+  sections.forEach((sec, si) => {
+    if (si > 0)
+      lint('PAGE-SECTION', 'warn', sec.start + 1,
+        `a second page-notes section — one per file; merge its items into the first`);
+    if (sec.end < maskedLines.length && maskedLines[sec.end].match(DEF_RE))
+      lint('PAGE-SECTION', 'warn', sec.end + 1,
+        `a footnote definition ends the page-notes section here — anything below it is prose; ` +
+        `definitions go under the marker line (§7.5 P6)`);
+    for (let l = sec.start; l < sec.end; l++) sectionLineSet.add(l);
+    const bulletLint = (bullet, line) => {
+      if (bullet !== '-')
+        lint('T-BULLET', 'warn', line,
+          `page-note bullet '${bullet}' — canonical bullet is '-' (formatters like remark emit '*')`, true);
+    };
+    let item = null, run = false; // run: inside an already-reported run of non-item content
+    for (let j = sec.start + 1; j < sec.end; j++) {
+      const l = rawLines[j];
+      const itemM = l.match(/^([-*+]) +(\S.*)$/);
+      if (itemM) {
+        bulletLint(itemM[1], j + 1);
+        item = { line: j + 1, section: si, head: parseEntry(itemM[2], opts.knownSpeakers), thread: [], continuation: [], endLine: j + 1 };
+        sectionItems.push(item); run = false; continue;
+      }
+      if (l.trim() === '') {
+        // a blank ends the item unless an indented reply or continuation follows
+        let k = j + 1;
+        while (k < sec.end && rawLines[k].trim() === '') k++;
+        if (item && k < sec.end && /^(?: {2,}|\t)\S/.test(rawLines[k])) {
+          if (item.continuation.length || item.thread.length) item.continuation.push('');
+        } else item = null;
+        run = false; continue;
+      }
+      const replyM = item && l.match(/^([ \t]+)([-*+]) (.*)$/);
+      const width = replyM ? replyM[1].replace(/\t/g, '    ').length : 0;
+      if (replyM && width >= 2) {
+        bulletLint(replyM[2], j + 1);
+        item.thread.push({ ...parseEntry(replyM[3], opts.knownSpeakers), line: j + 1, indent: width, bullet: replyM[2] });
+        item.endLine = j + 1; continue;
+      }
+      if (item && !replyM && /^(?: {2,}|\t)\S/.test(l)) {
+        item.continuation.push(l.replace(/^[ \t]+/, ''));
+        item.endLine = j + 1; continue;
+      }
+      if (!run)
+        lint('PAGE-SECTION', 'warn', j + 1,
+          `page-notes section holds content that is not a "- " item — ignored (each page note is one top-level list item)`);
+      run = true; item = null;
+    }
+  });
+
+  // ---- pass 2: mask indented code outside definition blocks and the section ----
   const defLineSet = new Set();
   for (const b of defBlocks) for (let l = b.startLine - 1; l < b.endLine; l++) defLineSet.add(l);
-  maskedLines = maskIndentedCode(maskedLines, defLineSet);
+  const structLineSet = new Set([...defLineSet, ...sectionLineSet]);
+  maskedLines = maskIndentedCode(maskedLines, structLineSet);
   masked = maskedLines.join('\n');
 
   // ---- H4-WRAP (heuristic): a probable ==highlight== wrapped across a soft
@@ -265,8 +356,8 @@ export function parse(input, opts = {}) {
   // detection on masked text (code/frontmatter already \x00-ed): a line whose
   // `==` token count is odd, followed before the block ends by another
   // odd-count line. Balanced same-line highlights count even; definition
-  // blocks are exempt; a rare prose `a == b` split over two lines is an
-  // accepted warn-level false positive.
+  // blocks and the page-notes section are exempt; a rare prose `a == b` split
+  // over two lines is an accepted warn-level false positive.
   // Known false negative: blockquote continuation lines (`> …`) count as
   // block starts here, so a wrap inside a quote goes undetected — accepted
   // under "conservative". Table rows and setext underlines are excluded: a
@@ -276,10 +367,10 @@ export function parse(input, opts = {}) {
     const isTableRow = (l) => /^\s*\|/.test(l);
     const isSetext = (l) => /^ {0,3}=+\s*$/.test(l);
     for (let i = 0; i < maskedLines.length; i++) {
-      if (defLineSet.has(i) || maskedLines[i].trim() === '' || isTableRow(maskedLines[i]) ||
+      if (structLineSet.has(i) || maskedLines[i].trim() === '' || isTableRow(maskedLines[i]) ||
           isSetext(maskedLines[i]) || !oddEq(maskedLines[i])) continue;
       for (let j = i + 1; j < maskedLines.length; j++) {
-        if (defLineSet.has(j) || maskedLines[j].trim() === '' || isTableRow(maskedLines[j]) ||
+        if (structLineSet.has(j) || maskedLines[j].trim() === '' || isTableRow(maskedLines[j]) ||
             isSetext(maskedLines[j]) || isBlockStart(maskedLines[j])) {
           // re-evaluate the boundary line itself as an opener (a bullet can
           // start its own wrapped pair); outer i++ lands on j — monotonic.
@@ -395,7 +486,7 @@ export function parse(input, opts = {}) {
   }
 
   // ---- assemble annotations ----
-  const marker = markerLine(rawLines);
+  const marker = markerLine(rawLines, sections);
   const annotations = [];
   for (const [label, def] of defs) {
     const bound = refs.filter((r) => r.label === label);
@@ -457,6 +548,7 @@ export function parse(input, opts = {}) {
     }
     annotations.push({
       label,
+      form: 'footnote',
       line: def.line,
       head: def.head,
       thread: def.thread.filter((t) => t.speaker !== 'echo'),
@@ -485,19 +577,55 @@ export function parse(input, opts = {}) {
         `ref [^${r.label}] has no definition — renders as literal text; scaffold a ` +
         `definition with placeholder text or remove the ref`);
 
+  // Section page notes (§7.5 Form B): synthetic labels page-<n> in document
+  // order — an address, never written to the file. No ref, so never orphaned,
+  // never bound, never stale; #m/page is implied by the section.
+  sectionItems.forEach((it, ix) => {
+    const label = `page-${ix + 1}`;
+    const nonEcho = [it.head, ...it.thread.filter((t) => t.speaker !== 'echo')];
+    const statusTag = nonEcho.flatMap((e) => e.tags.filter((t) => STATUS_TAGS.includes(t))).pop();
+    const echoes = it.thread.filter((t) => t.speaker === 'echo').map((t) => t.body);
+    if (echoes.length)
+      lint('PAGE-ECHO', 'warn', it.line, `page note ${label} carries echo items — page notes have no quote`);
+    annotations.push({
+      label,
+      form: 'section',
+      line: it.line,
+      head: it.head,
+      thread: nonEcho.slice(1),
+      echoes,
+      continuation: it.continuation,
+      type: it.head.tags.find((t) => !RESERVED_TAG.test(t)) ?? null,
+      status: statusTag === '#m/resolved' ? 'resolved' : 'open',
+      multi: false,
+      page: true,
+      targets: [],
+      orphan: false,
+      stale: false,
+    });
+  });
+  annotations.sort((a, b) => a.line - b.line);
+
+  // pageSections: the section extents (1-based, endLine inclusive of trailing
+  // blank lines — the line before the terminator) and their item counts.
   // marker: where page-note refs live (1-based; one past the last line when
   // the body is empty) and whether that line already is a marker line
-  return { highlights, refs, quicks, annotations, defBlocks, marker: { line: marker.index + 1, present: marker.present }, lints, text, starts };
+  const pageSectionsOut = sections.map((s, si) =>
+    ({ startLine: s.start + 1, endLine: s.end, items: sectionItems.filter((it) => it.section === si).length }));
+  return { highlights, refs, quicks, annotations, defBlocks, pageSections: pageSectionsOut,
+    marker: { line: marker.index + 1, present: marker.present }, lints, text, starts };
 }
 
 // ------------------------------------------------------------------- cuts --
-// One span set drives strip, flatten, and the WADM anchoring stream.
-function computeCuts(model, { fences = false } = {}) {
+// One span set drives strip, flatten, and the WADM anchoring stream. The
+// page-notes section (§7.5 Form B) is machinery like a definition block and
+// goes with the cuts; flatten keeps it (it is already flat).
+function computeCuts(model, { fences = false, keepSections = false } = {}) {
   const { text, starts, defBlocks, refs, quicks, annotations } = model;
   const cuts = [];
   for (const r of refs) cuts.push([r.start, r.end]);
   for (const q of quicks) if (q.owner) cuts.push([q.start, q.end]);
-  for (const b of defBlocks) {
+  for (const b of keepSections ? defBlocks : [...defBlocks, ...model.pageSections]) {
     const s = starts[b.startLine - 1];
     const e = b.endLine < starts.length ? starts[b.endLine] : text.length;
     cuts.push([s, e]);
@@ -548,8 +676,8 @@ function collapseAtSeams(out, seams) {
 
 // ------------------------------------------------------------------ strip --
 // Clean copy: highlights stay, all annotation machinery goes.
-export function strip(model) {
-  const cuts = computeCuts(model);
+export function strip(model, cutOpts = {}) {
+  const cuts = computeCuts(model, cutOpts);
   const { out, seams } = applyCuts(model.text, cuts);
   return collapseAtSeams(out, seams).replace(/\n{3,}$/, '\n');
 }
@@ -586,15 +714,17 @@ function streamContext(model, origPos, before) {
 
 // ---------------------------------------------------------------- flatten --
 // Refs out; annotations (labeled, quick, orphaned) to a '## Marginalia' section.
+// A page-notes section stays where it is — already flat, already readable.
 export function flatten(model) {
-  const body = strip(model);
+  const body = strip(model, { keepSections: true });
+  const anns = model.annotations.filter((a) => a.form !== 'section');
   const quicksOwned = model.quicks.filter((q) => q.owner);
-  if (!model.annotations.length && !quicksOwned.length) return body;
+  if (!anns.length && !quicksOwned.length) return body;
   const out = [body.trimEnd(), '', '## Marginalia', ''];
   if (/^## Marginalia$/m.test(body))
     process.stderr.write('warning: input already contains a "## Marginalia" heading\n');
   // page notes first (§7.5), in document order; they carry no quote line
-  const ordered = [...model.annotations.filter((a) => a.page), ...model.annotations.filter((a) => !a.page)];
+  const ordered = [...anns.filter((a) => a.page), ...anns.filter((a) => !a.page)];
   for (const a of ordered) {
     if (!a.page) {
       const quotes = a.targets.filter((t) => t.kind === 'highlight').map((t) => t.text);
@@ -656,9 +786,10 @@ export function wadm(model, source = 'file:notes.md') {
         ...(e.stamp ? { created: iso(e.stamp) } : {}),
       })),
     ],
-    // a page note targets the whole resource — no selector (§12); a point
-    // annotation's position is an anchoring-stream offset, like the quote context
-    target: !a.targets.length ? { source, 'marginalia:orphan': true, ...(a.echoes.length ? { 'marginalia:echo': a.echoes } : {}) }
+    // a page note targets the whole resource — no selector (§12); a section
+    // note (id <path>#page-<n>) has no ref to orphan; a point annotation's
+    // position is an anchoring-stream offset, like the quote context
+    target: !a.targets.length && a.form !== 'section' ? { source, 'marginalia:orphan': true, ...(a.echoes.length ? { 'marginalia:echo': a.echoes } : {}) }
       : a.page ? [{ source }]
       : a.targets.map((t) => ({
         source,
@@ -688,13 +819,16 @@ export function wadm(model, source = 'file:notes.md') {
 
 // -------------------------------------------------------------------- fix --
 // Mechanical fixes for lints marked (fixable). Returns fixed text.
-export function fix(input) {
-  let model = parse(input);
+export function fix(input, opts = {}) {
+  let model = parse(input, opts);
   let lines = model.text.split('\n');
+  const inSection = (i) => model.pageSections.some((s) => i >= s.startLine - 1 && i < s.endLine);
   // line-based fixes, bottom-up
   for (const l of [...model.lints].sort((a, b) => b.line - a.line)) {
     const i = l.line - 1;
-    if (l.rule === 'T1' || l.rule === 'T-BULLET') {
+    if (l.rule === 'T-BULLET' && inSection(i)) {
+      lines[i] = lines[i].replace(/^([ \t]*)[-*+] /, '$1- '); // a page-note bullet keeps its indent
+    } else if (l.rule === 'T1' || l.rule === 'T-BULLET') {
       lines[i] = lines[i].replace(/^([ \t]+)([-*+]) /, '    - ');
     } else if (l.rule === 'DEF-INDENT') {
       lines[i] = lines[i].replace(/^ +/, '');
@@ -706,7 +840,7 @@ export function fix(input) {
   }
   let text = lines.join('\n');
   // offset-based fixes on a fresh parse
-  model = parse(text);
+  model = parse(text, opts);
   const edits = [];
   for (const ref of model.refs) {
     if (ref.binding !== 'highlight') continue;
@@ -728,9 +862,9 @@ export function fix(input) {
     text = text.slice(0, e.start) + e.text + text.slice(e.end);
   // page notes (§7.5): every ref of a #m/page definition belongs on the
   // marker line — relocate strays (PAGE-PLACE/PAGE-BIND), re-insert orphans
-  text = placePageRefs(parse(text));
+  text = placePageRefs(parse(text, opts), opts);
   // L3 normalize: sequential labels are transients — relabel to random
-  model = parse(text);
+  model = parse(text, opts);
   const taken = new Set([...model.refs.map((r) => r.label), ...model.defBlocks.map((b) => b.label)]);
   for (const b of model.defBlocks) {
     if (!/^m-\d+$/.test(b.label)) continue;
@@ -746,11 +880,13 @@ export function fix(input) {
 }
 
 // Move every ref of a #m/page definition onto the marker line — reusing the
-// existing marker line or inserting one before the first body line — and
-// re-insert the ref of an orphaned page note (§7.5 P4: the one mechanical
-// orphan repair). Returns the edited text.
-function placePageRefs(model) {
-  const pages = model.annotations.filter((a) => a.page);
+// existing marker line or inserting one before the first body line (after a
+// leading page-notes section, P11) — and re-insert the ref of an orphaned page
+// note (§7.5 P4: the one mechanical orphan repair). Returns the edited text.
+function placePageRefs(model, opts = {}) {
+  // footnote form only: a section note has no ref, and its synthetic label
+  // is never written to the file (§7.5 P10)
+  const pages = model.annotations.filter((a) => a.page && a.form === 'footnote');
   if (!pages.length) return model.text;
   const labels = new Set(pages.map((a) => a.label));
   const onMarker = (r) => model.marker.present && r.line === model.marker.line;
@@ -769,12 +905,39 @@ function placePageRefs(model) {
     if (i > 0 && i < lines.length && lines[i - 1].trim() === '' && lines[i].trim() === '') lines.splice(i, 1);
   }
   if (missing.length) {
-    const marker = markerLine(lines);
+    // parsed (fence-masked) section extents: a raw scan would let a heading
+    // or marker-shaped line inside a code fence end the section early
+    const marker = markerLine(lines, parse(lines.join('\n'), opts).pageSections.map((s) => ({ start: s.startLine - 1, end: s.endLine })));
     const refsText = missing.map((l) => `[^${l}]`).join('');
     if (marker.present) lines[marker.index] = lines[marker.index].trimEnd() + refsText;
-    else lines.splice(marker.index, 0, refsText, '');
+    else {
+      // a line of its own (P2): pad with a blank when the previous line is
+      // content, or the ref would lazily continue a list item / paragraph
+      const prev = marker.index > 0 ? lines[marker.index - 1] : '';
+      const pad = prev.trim() !== '' && !/^(?:---|\.\.\.)$/.test(prev) && !prev.includes('%%') ? [''] : [];
+      lines.splice(marker.index, 0, ...pad, refsText, '');
+    }
   }
   return lines.join('\n');
+}
+
+// ---------------------------------------------------------------- extract --
+// Human-readable digest: one line per annotation with its anchor kind — the
+// quoted highlight(s), (point), (page) for a page note in either form, or
+// (unanchored) for an orphan — then its entries; quick annotations last.
+export function extract(model) {
+  const out = [];
+  for (const a of model.annotations) {
+    const quotes = a.targets.filter((t) => t.kind === 'highlight').map((t) => `"${t.text}"`).join(' + ');
+    const where = a.page ? '(page)' : quotes || (a.orphan ? '(unanchored)' : '(point)');
+    out.push(`[${a.status}${a.type ? ' ' + a.type : ''}] ${a.label} ${where}${a.orphan ? ' (ORPHAN)' : ''}${a.stale ? ' (stale echo)' : ''}`);
+    out.push(`  ${entryLine(a.head)}`);
+    for (const c of a.continuation) if (c.trim()) out.push(`  ${c}`);
+    for (const t of a.thread) out.push(`    - ${entryLine(t)}`);
+  }
+  for (const q of model.quicks.filter((q) => q.owner))
+    out.push(`[quick] "${q.owner.text}" — ${q.note}`);
+  return out;
 }
 
 // ---------------------------------------------------------------- helpers --
@@ -786,15 +949,21 @@ function entryLine(e) {
 // -------------------------------------------------------------------- cli --
 const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
 if (isMain) {
-  const args = process.argv.slice(2).filter((a) => a !== '--force');
-  const force = process.argv.includes('--force');
+  const argv = process.argv.slice(2);
+  const force = argv.includes('--force');
+  const args = [], opts = {};
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === '--force') continue;
+    if (argv[i] === '--page-heading') { opts.pageHeading = argv[++i]; continue; }
+    args.push(argv[i]);
+  }
   const [cmd, file] = args;
-  if (!cmd || !file) {
-    console.error('usage: node marginalia.mjs <parse|lint|extract|fix|strip|flatten|wadm> <file.md> [--force]');
+  if (!cmd || !file || (('pageHeading' in opts) && !opts.pageHeading)) {
+    console.error('usage: node marginalia.mjs <parse|lint|extract|fix|strip|flatten|wadm> <file.md> [--force] [--page-heading <text>]');
     process.exit(2);
   }
   const text = readFileSync(file, 'utf8');
-  const model = parse(text);
+  const model = parse(text, opts);
   const errors = model.lints.filter((l) => l.severity === 'error');
   const gate = () => {
     if (errors.length && !force) {
@@ -813,18 +982,9 @@ if (isMain) {
       `${errors.length} error(s), ${model.lints.length - errors.length} other finding(s)`);
     process.exit(errors.length ? 1 : 0);
   } else if (cmd === 'extract') {
-    for (const a of model.annotations) {
-      const quotes = a.targets.filter((t) => t.kind === 'highlight').map((t) => `"${t.text}"`).join(' + ');
-      const where = a.page ? '(page)' : quotes || (a.orphan ? '(unanchored)' : '(point)');
-      console.log(`[${a.status}${a.type ? ' ' + a.type : ''}] ${a.label} ${where}${a.orphan ? ' (ORPHAN)' : ''}${a.stale ? ' (stale echo)' : ''}`);
-      console.log(`  ${entryLine(a.head)}`);
-      for (const c of a.continuation) if (c.trim()) console.log(`  ${c}`);
-      for (const t of a.thread) console.log(`    - ${entryLine(t)}`);
-    }
-    for (const q of model.quicks.filter((q) => q.owner))
-      console.log(`[quick] "${q.owner.text}" — ${q.note}`);
+    for (const l of extract(model)) console.log(l);
   } else if (cmd === 'fix') {
-    process.stdout.write(fix(text));
+    process.stdout.write(fix(text, opts));
   } else if (cmd === 'strip') {
     gate();
     process.stdout.write(strip(model) + '\n');

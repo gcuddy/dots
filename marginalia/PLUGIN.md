@@ -50,6 +50,37 @@ cache, rebuildable from text, never authoritative.
    `==x==^[note]` as read-only annotations; one-command upgrade to `m-`
    labels.
 
+## Page notes: three storage modes, one sidebar
+
+A setting decides where a NEW page note is written; reading is form-agnostic
+(every form present in a file is shown and edited in place, in its own form):
+
+- **Footnote** (spec §7.5 Form A, the default): `#m/page` definition, ref on
+  the marker line. Real label, threads, status, strip/flatten/export.
+- **Heading section** (Form B): a `- ` item under the reserved `## Page
+  notes` heading (`pageNoteHeading` may rename it — then unconfigured tools
+  read that section as prose). Items have NO label: both parsers synthesize
+  `page-<n>` (n = 1-based order in the section) and **never write it to the
+  file** — it is an address, not an identity. Every label-addressed write op
+  (`editHead`, `addReply`, `resolveAnnotation`, `reopenAnnotation`,
+  `archiveAnnotation`, `deleteAnnotation`) dispatches on that shape to the
+  section item, re-found by a fresh parse + index, so a menu on a section
+  card needs no special casing; but the labels are positional — deleting
+  `page-1` makes the next item `page-1` — so re-read the model after every
+  write and never cache a synthetic label across writes.
+- **Frontmatter property** (plugin-only; spec P5 permits it): one plain
+  string in `pageNoteProperty` (default `note`) — no speaker, date, type,
+  thread, or status; read via `metadataCache` frontmatter, written and
+  deleted via `fileManager.processFrontMatter`, never through `write.ts`.
+  **It publishes with the file: `strip` never touches properties.** A
+  non-string value in that property renders read-only (the sidebar never
+  rewrites a hand-set list or number as prose).
+
+The reading view and Live Preview do nothing structural for the section form
+(the heading and its list render natively — that is the point of it); their
+card/def-block logic keys on ref and def-block labels, which a synthetic label
+never matches.
+
 ## Explicitly descoped from v1 (the Commentator-grade tail)
 
 - **Reading-mode footnote-sequence surgery** (splitting `m-` notes out of
