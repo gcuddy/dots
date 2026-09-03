@@ -2,7 +2,7 @@
 
 **A plain-text convention for annotating highlights in Obsidian-flavored Markdown.**
 
-Version 1.0-rc2 · 2026-08-31 · License: CC0
+Version 1.0-rc3 · 2026-09-02 · License: CC0
 
 ```markdown
 The ==map is not the territory==[^m-7f3k] as Korzybski said.
@@ -201,7 +201,8 @@ Why this exact shape (each clause is load-bearing, established empirically):
    render identically and a spec silent here contradicts itself.)
 5. **Point annotation:** any other marginalia ref binds to its position — a
    margin note on a location rather than a span (§7.2). Scope by convention:
-   the enclosing block.
+   the enclosing block — or the whole document, when the definition carries
+   `#m/page` (a page note, §7.5).
 6. **Nearest anchor only.** In `==a== and ==b==[^m-1]`, the ref binds to `b`
    alone. No action at a distance.
 
@@ -425,10 +426,11 @@ natively) that stay quarantined from your content taxonomy (bare `#q`,
 
 | Tag | Meaning |
 |---|---|
-| `#m/q` `#m/def` `#m/ref` `#m/todo` `#m/wow` … | **type** — open vocabulary; the type is the first non-reserved tag *of the head entry*; replies never set type. Reserved: exactly `#m/open`, `#m/resolved`, `#m/multi`, and the `#m/hl/…`, `#m/sync/…` families — everything else (even `#m/multiverse`) is a valid type |
+| `#m/q` `#m/def` `#m/ref` `#m/todo` `#m/wow` … | **type** — open vocabulary; the type is the first non-reserved tag *of the head entry*, in any position (`#m/page #m/q` and `#m/q #m/page` both type the note `#m/q`); replies never set type. Reserved: exactly `#m/open`, `#m/resolved`, `#m/multi`, `#m/page`, and the `#m/hl/…`, `#m/sync/…` families — everything else (even `#m/multiverse`, `#m/pages`) is a valid type |
 | `#m/open` / `#m/resolved` | **status** — absence = open; the *last* occurrence across definition + thread wins, so a reply after resolution doesn't silently reopen, and an explicit `#m/open` in a later reply does |
 | `#m/hl/yellow` `#m/hl/red` … | **highlight color/kind** — a tool styles the `==mark==` from its annotation's tag, so color survives as a readable word, not syntax (the Highlightr lesson: 709k installs of inline `<mark style>` debris, now unmaintained) |
 | `#m/multi` | declared multi-segment highlight (§7.3) |
+| `#m/page` | **scope** — the definition is a page note about the whole document (§7.5); read from the head entry only, replies never set scope |
 | `#m/sync/rw-884213` | **machine key** convention for importers (Readwise-class) — readable, greppable, native |
 
 ### 6.7 Full grammar
@@ -458,8 +460,13 @@ The whole argument of this chapter feels rushed.[^m-c3d4]
 [^m-c3d4]: gus: compare the care taken in ch. 2 — was this one cut down? #m/q
 ```
 
-Use for commentary on a paragraph/section rather than a span. For a whole
-section, place it at the end of the heading line or lead paragraph.
+Use for commentary on a paragraph or section rather than a span. For a whole
+section, put the ref at the end of the section's lead paragraph or on a line
+of its own directly under the heading — **never inside the heading line**: a
+footnote ref in a heading changes the heading's link key in Obsidian
+(`[[Note#Heading]]` stops resolving — `stripHeading` in the 1.9.14 bundle
+keeps the label, so the key becomes `Heading m-c3d4`) and pandoc's
+auto-generated id. A note about the *whole document* is a page note (§7.5).
 
 ### 7.3 Multi-segment highlights
 
@@ -516,6 +523,75 @@ Do **not** put block IDs on footnote-definition lines. Attacked and dropped:
 unverified in Obsidian, and the documented block-ID rules (must terminate a
 line; cannot address sub-parts of composite blocks) give concrete reason to
 expect failure on a definition carrying an indented thread.
+
+### 7.5 Page notes
+
+A **page note** is a note about the document as a whole — the verdict on a
+source, a summary, a to-do for the whole file. It is an ordinary labeled
+annotation whose **head entry carries the reserved scope tag `#m/page`**:
+
+```markdown
+---
+status: read
+rating: 4
+---
+[^m-pg7k][^m-pgq2]
+
+[^m-pg7k]: gus (2026-09-01): Finish the Popper chapter before the seminar. #m/todo #m/page
+    - gus (2026-09-03): Done — best chapter in the book. #m/resolved
+
+[^m-pgq2]: claude (2026-09-01): Rare, high-impact events dominate history, and narrative blinds us to them — that is the whole argument. #m/page
+
+    The second half turns the same lens on finance; the epilogue is mostly a rebuttal of early critics.
+
+# The Black Swan — reading notes
+
+Taleb opens by claiming ==history does not crawl, it jumps==[^m-7f3k] and
+builds everything on that image.
+
+[^m-7f3k]: gus (2026-09-01): The whole book in one sentence. #m/def
+```
+
+- **P1. Scope by tag, visibility by ref.** `#m/page` on the head entry makes
+  the definition a page note; replies never set scope. The ref carries no
+  meaning of its own — it is the visibility marker that makes the definition
+  render (an unreferenced definition renders nowhere, §8.2). Every ref to a
+  page note is a point ref (§5.1 rule 5), and readers treat *any* point ref
+  whose definition carries `#m/page` as a page note wherever it sits.
+- **P2. The marker line.** Page-note refs live on a line of their own — the
+  **marker line** — the first non-blank body line after frontmatter (a
+  leading `%%…%%` comment block is skipped; an unterminated `%%` is body,
+  not a skipped block). Several page notes share it,
+  `[^m-pg7k][^m-pgq2]`; document order = display order. The marker MUST NOT
+  sit in a heading line (§7.2) and MUST NOT follow a highlight on its line
+  (it would bind, §5.1 rule 2). Placement is linted, never a parse
+  precondition: PAGE-PLACE (info, fixable) — a page-note ref anywhere else;
+  the fix moves it to the marker line. PAGE-BIND (warn, fixable) — a
+  `#m/page` label bound to a highlight; the fix relocates the ref to the
+  marker line. PAGE-ECHO (warn) — a `#m/page` definition carrying `- echo:`
+  items, almost always an orphan re-tagged instead of repaired.
+- **P3. No quote, no echo.** A page note has nothing to snapshot. Everything
+  else is unchanged: threads, status (`#m/resolved`, §8.1), E5 continuation
+  paragraphs for a multi-paragraph body, archive (the §8.2 form without its
+  quote line), delete.
+- **P4. Orphan repair is mechanical.** A `#m/page` definition with no ref is
+  an orphan (§8.3) with exactly one repair: re-insert the ref on the marker
+  line. ORPHAN reports it *fixable* and `fix` does it; it is never
+  echo-searched and never parked. The orphan flag itself keeps its meaning —
+  "has no ref".
+- **P5. Facts are properties, not page notes.** Rating, status, source,
+  dates, description: frontmatter properties, outside this format (H5).
+  Marginalia never reads, writes, or displays them. A page note is prose
+  *about* the document.
+- **P6. Definition placement.** A page-note definition goes directly under
+  the marker line, a blank line between (E6), *always* — the one exception
+  to E7's scatter rule — so Reading view cards it under the title and a
+  source-mode reader meets it before the prose. The definitions of several
+  page notes follow in marker order. One placement exception is forced by
+  E5's grammar: when the line after the marker begins an indented block
+  (4+ spaces or a tab), the definition goes *after* that run — placed
+  directly above it, every renderer would absorb the block as continuation
+  of the note, and `strip` would delete the reader's own text with it.
 
 ---
 
@@ -581,6 +657,11 @@ Two asymmetric failure modes:
   loss stays visible. Only an explicit accept-the-loss removes a dead echo;
   a repair that ends with one bound segment drops `#m/multi` with it (a
   one-segment multi is just a highlight, and M2 would keep warning).
+- **Orphaned page notes** (`#m/page`, §7.5) are the exception to the
+  pipeline: there is no quote to search for and only one place the ref can
+  go, so the repair is mechanical — re-insert the ref on the marker line.
+  ORPHAN reports them *fixable* and `fix` does exactly that; they are never
+  echo-searched and never parked.
 
 ---
 
@@ -593,6 +674,10 @@ For machine writers (Readwise-class importers, dedupe tools, agents):
   the TextQuoteSelector this spec exports anyway). Bare quote-as-identity is
   known-insufficient: the same phrase highlighted in chapter 1 and chapter 9
   must remain two annotations (the attack that killed the naive rule).
+- **Page notes** (§7.5) have *label* identity only — no quote, no context,
+  nothing to match. An imported non-reply annotation whose target carries no
+  selector (a Hypothesis Page Note, a WADM whole-resource target) becomes a
+  page note — never an orphan, never parked.
 - **Merge rule:** an incoming highlight matching an existing annotated
   quote+context merges instead of duplicating; **the copy carrying human
   commentary always wins**; machine metadata merges in; entries dedup by
@@ -640,7 +725,9 @@ node marginalia.mjs wadm    notes.md     # W3C Web Annotation JSON-LD export
 `strip` and `flatten` — the publish-safety commands — **refuse to run** while
 error-severity lints are present (`--force` overrides), because several error
 conditions are precisely the ones under which stripping would leak private
-text.
+text. `extract` prints one line per annotation with its anchor kind: the
+quoted highlight(s), `(point)`, `(page)` for a page note (§7.5), or
+`(unanchored)` for an orphan.
 
 What the linter actually checks: E1, E2, E3, E6/LAZY, T1 (+bullets), Q1
 (stacks and mixed forms), L1 (label grammar), L3, L4, NEAR-MISS, M1 (error),
@@ -648,10 +735,14 @@ M2/MULTI-STALE (warn — fires while some ref survives; zero refs is
 ORPHAN's), ECHO-COUNT (warn — gated on echoes present, §6.5), STALE (with
 the §6.5 set-match suppression), H3, H4-WRAP (warn, heuristic — a probable
 highlight wrapped across a line break), DEF-INDENT, BIND-SPACE/BIND-PUNCT,
-ORPHAN, DANGLING. Not machine-checkable: H1/H2 (a broken highlight is just
-literal text to a parser — though H4-WRAP heuristically catches the
-line-wrapped case), E4 misattribution (a hint by design), and the §10
-toolchain discipline — those remain your habits, not the linter's.
+ORPHAN (fixable for a page note — its ref goes back on the marker line,
+§7.5), DANGLING, PAGE-PLACE (info, fixable — a page-note ref off the marker
+line), PAGE-BIND (warn, fixable — a `#m/page` label bound to a highlight),
+PAGE-ECHO (warn — echoes on a page note). Not machine-checkable: H1/H2 (a
+broken highlight is just literal text to a parser — though H4-WRAP
+heuristically catches the line-wrapped case), E4 misattribution (a hint by
+design), and the §10 toolchain discipline — those remain your habits, not
+the linter's.
 
 Two grep patterns are blessed as **lossy helpers** — quick vault-wide
 discovery, nothing more:
@@ -700,13 +791,24 @@ annotation, plus one per bare highlight):
   threads.
 - `#m/resolved` → an annotation-status extension field (the `marginalia:`
   prefix is declared in the export's `@context`).
+- A **page note** (§7.5) targets the whole resource: `target` is
+  `[{ source }]` with no selector — the WADM whole-resource target, and the
+  shape Hypothesis gives its Page Notes. An orphaned page note keeps
+  `marginalia:orphan`.
+- A **point annotation** exports a `TextPositionSelector` whose `start` and
+  `end` are offsets into the same anchoring stream the quote context uses —
+  never raw source offsets, which count machinery the consumer's copy does
+  not contain.
 
 **Import** (Hypothesis/Readwise/WADM → vault): locate
 `TextQuoteSelector.exact` (exact → normalized → prefix/suffix-assisted
 bounded fuzzy; position a ~2% tie-breaker at most — the weighting Hypothesis
 converged on after a decade), wrap `==…==`, mint a label, write definition +
 echo + entries. Unlocatable quotes go to `## Orphaned marginalia` — imported
-data is never silently dropped. Merging follows §9.
+data is never silently dropped. A non-reply annotation whose target carries
+no selector imports as a page note (§7.5): mint a label, put the ref on the
+marker line and the definition directly under it — never an orphan. Merging
+follows §9.
 
 ---
 
@@ -760,6 +862,20 @@ Each rejection below was tested, not assumed.
   matches it exactly; Level 2 adds only the `m-` namespace it lacks. Tools
   SHOULD read plain-label and inline forms as read-only annotations and
   offer one-command upgrade.
+- **Page notes — Hypothesis's model kept, Readwise's rejected.** Hypothesis
+  has shipped *Page Notes* — an annotation whose target is the whole
+  document, no selector — since 2015, and its users treat them as the natural
+  home for a verdict on a source; §7.5 is that object in file form, exported
+  as the same selector-less target (§12). Readwise's alternative, one
+  overwritable `document_note` string per source, was rejected: one slot, no
+  author, no date, no thread, and regeneration on import overwrites it. Why
+  not a `## Notes` section, a callout, or a frontmatter property: a section
+  or callout is prose the publish path (`strip`/`flatten`) cannot tell from
+  the document, so it can neither hide nor gather it; a property is a *fact*
+  (rating, status — P5), and YAML has no highlights, no threads, no
+  tags-as-metadata. A footnote with one reserved scope tag rides every
+  mechanism already here — hover preview, threads, status, strip, flatten,
+  export — for the price of one tag and one marker line.
 
 ---
 
@@ -792,6 +908,11 @@ The complete list of MUSTs whose violation causes verified damage:
    sources; never Prettier `--prose-wrap always`; strip before publishing.
 10. **H5/§11** — extraction ignores code regions (fenced, inline, and
     indented code blocks alike).
+11. **§7.2/§7.5** — never a footnote ref inside a heading line: a section
+    note goes at the end of the lead paragraph or on a line under the
+    heading; a page note goes on the marker line. (A ref in a heading changes
+    the heading's Obsidian link key and pandoc's auto-id — `[[Note#Heading]]`
+    stops resolving.)
 
 ## Appendix B — Collected grammar (ABNF-ish)
 
@@ -836,6 +957,9 @@ body         = inline-markdown                   ; thread-item bodies are free;
                                                  ;   only def-body carries E1
 tag          = "#m/" 1*( ALPHA / DIGIT / "/" / "-" )
 block-anchor = SP "^" label                      ; end of prose paragraph only
+marker-line  = *3SP 1*( ref *WSP )                ; page-note refs (§7.5): the
+                                                 ;   first non-blank body line
+                                                 ;   after frontmatter
 ```
 
 ## Appendix C — Live-vault verification checklist (the 1.0 gate)
@@ -857,6 +981,12 @@ before building plugin features on them), verify in a real vault:
 - [ ] Block ID at end of a highlight-bearing prose paragraph: `[[#^m-…]]`
       resolves; embed shows the paragraph.
 - [ ] Footnote hover preview on mobile; footnote tap behavior on mobile.
+- [ ] Marker line (`[^m-pg7k][^m-pgq2]` as the first body line, §7.5) in
+      **Reading view**: bare superscript refs under the title, the definitions
+      render as footnotes with hover preview; in **Live Preview**: the refs
+      render as footnote widgets, not raw text, and hover works.
+- [ ] Marker-line ref tap behavior on **mobile** (opens or scrolls to the
+      definition; no accidental edit-mode entry).
 - [ ] `==text ==` (Obsidian-lax) still renders there (then normalize it away).
 
 ## Appendix D — Provenance

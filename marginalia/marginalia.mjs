@@ -23,7 +23,10 @@ const DEF_RE = new RegExp(`^( {0,3})\\[\\^(${LABEL})\\]:(.*)$`);
 const NEARMISS_RE = /\[\^([Mm][-_][A-Za-z0-9_-]{1,40})\]/g;
 const CLOSE_PUNCT = `.,;:!?)"'»…”’›`;
 const STATUS_TAGS = ['#m/open', '#m/resolved'];
-const RESERVED_TAG = /^#m\/(open|resolved|multi)$|^#m\/(hl|sync)\//;
+// Reserved tags never act as the type (§6.6): status, multi, the page scope
+// tag, and the hl/sync families — matched as a set, so tag order is irrelevant.
+const RESERVED_TAG = /^#m\/(open|resolved|multi|page)$|^#m\/(hl|sync)\//;
+const PAGE_TAG = '#m/page';
 // CommonMark link-reference-definition shape: destination + optional title.
 // A definition body matching this vanishes in strict CommonMark (spec E1).
 const LINKREF_SHAPE = /^\S+[ \t]*$|^\S+[ \t]+("[^"]*"|'[^']*'|\([^)]*\))[ \t]*$/;
@@ -32,15 +35,20 @@ const LINKREF_SHAPE = /^\S+[ \t]*$|^\S+[ \t]+("[^"]*"|'[^']*'|\([^)]*\))[ \t]*$/
 // Replace code regions with \x00 of equal length so offsets are preserved but
 // no syntax matches inside them (spec H5/§11). Two passes: fences + inline
 // spans here; indented code blocks after definition extents are known.
+// YAML frontmatter extent: index of the first body line (0 when there is no
+// frontmatter or its fence never closes).
+function frontmatterEnd(lines) {
+  if (lines[0] !== '---') return 0;
+  let fm = 1;
+  while (fm < lines.length && lines[fm] !== '---' && lines[fm] !== '...') fm++;
+  return fm < lines.length ? fm + 1 : 0;
+}
+
 function maskFencesAndInline(text) {
   const lines = text.split('\n');
   // YAML frontmatter is metadata, not prose: mask it entirely so ==marks==
   // inside properties are never highlights and tools never write there.
-  if (lines[0] === '---') {
-    let fm = 1;
-    while (fm < lines.length && lines[fm] !== '---' && lines[fm] !== '...') fm++;
-    if (fm < lines.length) for (let i = 0; i <= fm; i++) lines[i] = '\x00'.repeat(lines[i].length);
-  }
+  for (let i = 0, fm = frontmatterEnd(lines); i < fm; i++) lines[i] = '\x00'.repeat(lines[i].length);
   let fence = null;
   const out = lines.map((line) => {
     const open = line.match(/^(\s*)(`{3,}|~{3,})/);
@@ -79,6 +87,28 @@ function maskIndentedCode(maskedLines, defLineSet) {
     i = j - 1;
   }
   return maskedLines;
+}
+
+// ------------------------------------------------------------ marker line --
+// Page notes (§7.5) put their refs on the marker line: the first non-blank
+// body line after frontmatter, skipping a leading %%…%% comment block. Returns
+// its 0-based index (lines.length for an empty body) and whether that line is
+// already a marker — a line consisting only of marginalia refs.
+const MARKER_LINE_RE = new RegExp(`^ {0,3}(?:\\[\\^${LABEL}\\][ \\t]*)+$`); // <=3 leading spaces: 4+ is an indented code block
+function markerLine(lines) {
+  let i = frontmatterEnd(lines);
+  for (;;) {
+    while (i < lines.length && lines[i].trim() === '') i++;
+    if (i >= lines.length || !/^[ \t]*%%/.test(lines[i])) break;
+    if (!lines[i].replace(/^[ \t]*%%/, '').includes('%%')) {
+      let j = i + 1;
+      while (j < lines.length && !lines[j].includes('%%')) j++;
+      if (j >= lines.length) break; // unterminated comment: it is the body start, not a skipped block
+      i = j;
+    }
+    i++;
+  }
+  return { index: i, present: i < lines.length && MARKER_LINE_RE.test(lines[i]) };
 }
 
 // ------------------------------------------------------------------ lines --
@@ -365,6 +395,7 @@ export function parse(input, opts = {}) {
   }
 
   // ---- assemble annotations ----
+  const marker = markerLine(rawLines);
   const annotations = [];
   for (const [label, def] of defs) {
     const bound = refs.filter((r) => r.label === label);
@@ -406,6 +437,24 @@ export function parse(input, opts = {}) {
     if (stale)
       lint('STALE', 'info', def.line,
         `[^${label}] echo no longer matches the highlighted text — the highlight was edited after annotation`);
+    // Page notes (§7.5): scope comes from #m/page on the head entry; the ref is
+    // only the visibility marker, so every ref belongs on the marker line.
+    const page = def.head.tags.includes(PAGE_TAG);
+    if (page) {
+      if (echoes.length)
+        lint('PAGE-ECHO', 'warn', def.line,
+          `page note [^${label}] carries echo items — page notes have no quote; ` +
+          `probably an orphan re-tagged #m/page instead of repaired`);
+      for (const r of bound) {
+        if (r.binding === 'highlight')
+          lint('PAGE-BIND', 'warn', r.line,
+            `page note [^${label}] is bound to a highlight — #m/page means document scope; ` +
+            `move the ref to the marker line`, true);
+        else if (!(marker.present && r.line - 1 === marker.index))
+          lint('PAGE-PLACE', 'info', r.line,
+            `page note ref [^${label}] is not on the marker line (the first body line, §7.5)`, true);
+      }
+    }
     annotations.push({
       label,
       line: def.line,
@@ -416,6 +465,7 @@ export function parse(input, opts = {}) {
       type: def.head.tags.find((t) => !RESERVED_TAG.test(t)) ?? null, // head entry only (§6.6)
       status: statusTag === '#m/resolved' ? 'resolved' : 'open',
       multi: allTags.includes('#m/multi'),
+      page,
       targets: bound.map((r) => r.binding === 'highlight'
         ? { kind: 'highlight', text: r.highlight.text, line: r.highlight.line, start: r.highlight.start, end: r.highlight.end }
         : { kind: 'point', line: r.line, start: r.start }),
@@ -423,9 +473,11 @@ export function parse(input, opts = {}) {
       stale,
     });
     if (bound.length === 0)
-      lint('ORPHAN', 'warn', def.line,
-        `definition [^${label}] has no reference — invisible in every rendered view; ` +
-        `re-anchor it or park it under '## Orphaned marginalia'`);
+      lint('ORPHAN', 'warn', def.line, page
+        ? `page note [^${label}] has no reference — invisible in every rendered view; ` +
+          `fix re-inserts its ref on the marker line`
+        : `definition [^${label}] has no reference — invisible in every rendered view; ` +
+          `re-anchor it or park it under '## Orphaned marginalia'`, page);
   }
   for (const r of refs)
     if (!defs.has(r.label))
@@ -433,7 +485,9 @@ export function parse(input, opts = {}) {
         `ref [^${r.label}] has no definition — renders as literal text; scaffold a ` +
         `definition with placeholder text or remove the ref`);
 
-  return { highlights, refs, quicks, annotations, defBlocks, lints, text, starts };
+  // marker: where page-note refs live (1-based; one past the last line when
+  // the body is empty) and whether that line already is a marker line
+  return { highlights, refs, quicks, annotations, defBlocks, marker: { line: marker.index + 1, present: marker.present }, lints, text, starts };
 }
 
 // ------------------------------------------------------------------- cuts --
@@ -539,19 +593,24 @@ export function flatten(model) {
   const out = [body.trimEnd(), '', '## Marginalia', ''];
   if (/^## Marginalia$/m.test(body))
     process.stderr.write('warning: input already contains a "## Marginalia" heading\n');
-  for (const a of model.annotations) {
-    const quotes = a.targets.filter((t) => t.kind === 'highlight').map((t) => t.text);
-    const q = quotes.length ? quotes : a.echoes;
-    for (const quote of q) out.push(`> ${quote}`);
-    if (!q.length) {
-      const t = a.targets.find((x) => x.kind === 'point');
-      if (t) {
-        const line = model.text.split('\n')[t.line - 1] ?? '';
-        const clean = line.replace(new RegExp(`\\[\\^${LABEL}\\]`, 'g'), '').trim().slice(0, 80);
-        out.push(`> near: ${clean}`);
+  // page notes first (§7.5), in document order; they carry no quote line
+  const ordered = [...model.annotations.filter((a) => a.page), ...model.annotations.filter((a) => !a.page)];
+  for (const a of ordered) {
+    if (!a.page) {
+      const quotes = a.targets.filter((t) => t.kind === 'highlight').map((t) => t.text);
+      const q = quotes.length ? quotes : a.echoes;
+      for (const quote of q) out.push(`> ${quote}`);
+      if (!q.length) {
+        const t = a.targets.find((x) => x.kind === 'point');
+        if (t) {
+          const line = model.text.split('\n')[t.line - 1] ?? '';
+          const clean = line.replace(new RegExp(`\\[\\^${LABEL}\\]`, 'g'), '')
+            .replace(/^\s*#+ /, '').replace(/==/g, '').trim().slice(0, 80);
+          out.push(`> near: ${clean}`);
+        }
       }
+      out.push('>');
     }
-    out.push('>');
     out.push(`> — ${entryLine(a.head)}`);
     for (const c of a.continuation) out.push(c.trim() === '' ? '>' : `> ${c}`);
     for (const t of a.thread) out.push(`>   - ${entryLine(t)}`);
@@ -597,11 +656,15 @@ export function wadm(model, source = 'file:notes.md') {
         ...(e.stamp ? { created: iso(e.stamp) } : {}),
       })),
     ],
-    target: a.targets.length ? a.targets.map((t) => ({
-      source,
-      selector: t.kind === 'highlight' ? selectorFor(t)
-        : { type: 'TextPositionSelector', start: t.start, end: t.start },
-    })) : { source, 'marginalia:orphan': true, ...(a.echoes.length ? { 'marginalia:echo': a.echoes } : {}) },
+    // a page note targets the whole resource — no selector (§12); a point
+    // annotation's position is an anchoring-stream offset, like the quote context
+    target: !a.targets.length ? { source, 'marginalia:orphan': true, ...(a.echoes.length ? { 'marginalia:echo': a.echoes } : {}) }
+      : a.page ? [{ source }]
+      : a.targets.map((t) => ({
+        source,
+        selector: t.kind === 'highlight' ? selectorFor(t)
+          : { type: 'TextPositionSelector', start: toStreamPos(model, t.start), end: toStreamPos(model, t.start) },
+      })),
   }));
   for (const q of model.quicks.filter((q) => q.owner)) {
     out.push({
@@ -663,6 +726,9 @@ export function fix(input) {
   }
   for (const e of edits.sort((a, b) => b.start - a.start))
     text = text.slice(0, e.start) + e.text + text.slice(e.end);
+  // page notes (§7.5): every ref of a #m/page definition belongs on the
+  // marker line — relocate strays (PAGE-PLACE/PAGE-BIND), re-insert orphans
+  text = placePageRefs(parse(text));
   // L3 normalize: sequential labels are transients — relabel to random
   model = parse(text);
   const taken = new Set([...model.refs.map((r) => r.label), ...model.defBlocks.map((b) => b.label)]);
@@ -677,6 +743,38 @@ export function fix(input) {
     text = text.split(`[^${b.label}]`).join(`[^${fresh}]`);
   }
   return text;
+}
+
+// Move every ref of a #m/page definition onto the marker line — reusing the
+// existing marker line or inserting one before the first body line — and
+// re-insert the ref of an orphaned page note (§7.5 P4: the one mechanical
+// orphan repair). Returns the edited text.
+function placePageRefs(model) {
+  const pages = model.annotations.filter((a) => a.page);
+  if (!pages.length) return model.text;
+  const labels = new Set(pages.map((a) => a.label));
+  const onMarker = (r) => model.marker.present && r.line === model.marker.line;
+  const strays = model.refs.filter((r) => labels.has(r.label) && !onMarker(r));
+  const placed = new Set(model.refs.filter((r) => labels.has(r.label) && onMarker(r)).map((r) => r.label));
+  const missing = pages.map((a) => a.label).filter((l) => !placed.has(l));
+  if (!strays.length && !missing.length) return model.text;
+  let text = model.text;
+  for (const r of [...strays].sort((a, b) => b.start - a.start))
+    text = text.slice(0, r.start) + text.slice(r.end);
+  const lines = text.split('\n');
+  // a stray's line left blank by the removal (a misplaced marker line) goes too
+  for (const i of [...new Set(strays.map((r) => r.line - 1))].sort((a, b) => b - a)) {
+    if (lines[i].trim() !== '') continue;
+    lines.splice(i, 1);
+    if (i > 0 && i < lines.length && lines[i - 1].trim() === '' && lines[i].trim() === '') lines.splice(i, 1);
+  }
+  if (missing.length) {
+    const marker = markerLine(lines);
+    const refsText = missing.map((l) => `[^${l}]`).join('');
+    if (marker.present) lines[marker.index] = lines[marker.index].trimEnd() + refsText;
+    else lines.splice(marker.index, 0, refsText, '');
+  }
+  return lines.join('\n');
 }
 
 // ---------------------------------------------------------------- helpers --
@@ -717,7 +815,7 @@ if (isMain) {
   } else if (cmd === 'extract') {
     for (const a of model.annotations) {
       const quotes = a.targets.filter((t) => t.kind === 'highlight').map((t) => `"${t.text}"`).join(' + ');
-      const where = quotes || (a.orphan ? '(unanchored)' : '(point)');
+      const where = a.page ? '(page)' : quotes || (a.orphan ? '(unanchored)' : '(point)');
       console.log(`[${a.status}${a.type ? ' ' + a.type : ''}] ${a.label} ${where}${a.orphan ? ' (ORPHAN)' : ''}${a.stale ? ' (stale echo)' : ''}`);
       console.log(`  ${entryLine(a.head)}`);
       for (const c of a.continuation) if (c.trim()) console.log(`  ${c}`);

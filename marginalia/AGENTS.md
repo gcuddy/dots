@@ -64,6 +64,13 @@ For a **multi-segment** highlight (one comment spanning several passages):
 reuse ONE label on every segment's highlight and put `#m/multi` in the
 definition, with one `- echo:` item per segment in document order.
 
+For a **page note** (a note about the whole document, not a span): put the
+ref(s) on the **marker line** — a line holding only `[^m-…]` refs as the
+first non-blank body line after frontmatter (append to it if it exists,
+never put a ref inside a heading line) — and the definition directly
+beneath it, blank line between. Put `#m/page` on the head entry only, and
+write no `- echo:` item. Several page notes share the one marker line.
+
 To reply to an existing annotation, append a thread item under its
 definition, indented **exactly 4 spaces**:
 

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // test.mjs — regression tests for marginalia.mjs. Every case here encodes a
 // defect found during adversarial review; run `node test.mjs` (exit 0 = pass).
+import { readFileSync } from 'node:fs';
 import { parse, strip, flatten, wadm, fix } from './marginalia.mjs';
 
 let failures = 0;
@@ -255,6 +256,118 @@ const hasLint = (m, rule, sev) => m.lints.some((l) => l.rule === rule && (!sev |
   t('orphan: lint fires', hasLint(m, 'ORPHAN', 'warn'));
   t('dangling: lint fires', hasLint(m, 'DANGLING', 'warn'));
   t('orphan: wadm keeps body', JSON.stringify(wadm(m)).includes('I am orphaned text'));
+}
+
+// --- page notes (§7.5): reserved-tag slot, page flag, marker line ---------
+{
+  const m1 = parse('[^m-pa]\n\n[^m-pa]: gus: note here #m/page #m/q\n');
+  const m2 = parse('[^m-pb]\n\n[^m-pb]: gus: note here #m/q #m/page\n');
+  t('page: #m/page never the type (page first)', m1.annotations[0].type === '#m/q');
+  t('page: #m/page never the type (page last)', m2.annotations[0].type === '#m/q');
+  t('page: flag set from head tag', m1.annotations[0].page === true && m2.annotations[0].page === true);
+  t('page: marker line clean', m1.lints.length === 0 && m2.lints.length === 0, JSON.stringify(m1.lints));
+  t('page: #m/pages is an ordinary type', parse('x[^m-pc]\n\n[^m-pc]: gus: note here #m/pages\n').annotations[0].type === '#m/pages');
+  const m3 = parse('x[^m-pd]\n\n[^m-pd]: gus: head has no page tag\n    - gus: reply #m/page\n');
+  t('page: replies never set scope', m3.annotations[0].page === false);
+  t('page: model exposes the marker line', m1.marker.line === 1 && m1.marker.present === true);
+}
+
+// --- page notes: PAGE-PLACE / PAGE-BIND / PAGE-ECHO and their fixes --------
+{
+  const heading = '# Title[^m-pg]\n\nProse here.\n\n[^m-pg]: gus: page note here #m/page\n';
+  const mh = parse(heading);
+  t('page-place: ref in heading line lints info+fixable', hasLint(mh, 'PAGE-PLACE', 'info') && mh.lints.find((l) => l.rule === 'PAGE-PLACE').fixable);
+  const fh = fix(heading);
+  t('page-place: fix moves ref to a new marker line', fh.startsWith('[^m-pg]\n\n# Title\n'), JSON.stringify(fh));
+  t('page-place: fixed file is clean', parse(fh).lints.length === 0, JSON.stringify(parse(fh).lints));
+  const mid = '# Title\n\nPara one.\n\n[^m-pg]\n\nPara two.\n\n[^m-pg]: gus: page note here #m/page\n';
+  const fm = fix(mid);
+  t('page-place: misplaced marker line removed and blank collapsed', fm === '[^m-pg]\n\n# Title\n\nPara one.\n\nPara two.\n\n[^m-pg]: gus: page note here #m/page\n', JSON.stringify(fm));
+  const bound = 'A ==span==[^m-pg] here.\n\n[^m-pg]: gus: page note here #m/page\n';
+  const mb = parse(bound);
+  t('page-bind: page label bound to highlight warns fixable', hasLint(mb, 'PAGE-BIND', 'warn') && mb.lints.find((l) => l.rule === 'PAGE-BIND').fixable);
+  const fb = fix(bound);
+  t('page-bind: fix relocates ref, highlight stays bare', fb === '[^m-pg]\n\nA ==span== here.\n\n[^m-pg]: gus: page note here #m/page\n', JSON.stringify(fb));
+  const me = parse('[^m-pg]\n\n[^m-pg]: gus: page note here #m/page\n    - echo: some text\n');
+  t('page-echo: echo on a page note warns', hasLint(me, 'PAGE-ECHO', 'warn'));
+  t('page-echo: not fixable', !me.lints.find((l) => l.rule === 'PAGE-ECHO').fixable);
+}
+
+// --- page notes: orphan re-insert, marker stacking, %% skip ---------------
+{
+  const orphan = '---\nx: 1\n---\n\n# Title\n\n[^m-pg]: gus: page note here #m/page\n';
+  const mo = parse(orphan);
+  t('page-orphan: ORPHAN fires fixable', hasLint(mo, 'ORPHAN', 'warn') && mo.lints.find((l) => l.rule === 'ORPHAN').fixable);
+  t('page-orphan: orphan flag still means no ref', mo.annotations[0].orphan === true);
+  t('page-orphan: ordinary orphan stays unfixable', !parse('[^m-o1]: gus: plain orphan here\n').lints.find((l) => l.rule === 'ORPHAN').fixable);
+  const fo = fix(orphan);
+  t('page-orphan: fix inserts marker after frontmatter', fo === '---\nx: 1\n---\n\n[^m-pg]\n\n# Title\n\n[^m-pg]: gus: page note here #m/page\n', JSON.stringify(fo));
+  const stack = '[^m-a1]\n\n[^m-a1]: gus: first page note #m/page\n\n[^m-b2]: gus: second page note #m/page\n\n# Title\n';
+  const fs = fix(stack);
+  t('page-stack: orphan appended to existing marker line', fs.startsWith('[^m-a1][^m-b2]\n\n[^m-a1]:'), JSON.stringify(fs));
+  t('page-stack: fixed file clean', parse(fs).lints.length === 0, JSON.stringify(parse(fs).lints));
+  const two = parse('[^m-a1][^m-b2]\n\n[^m-a1]: gus: first #m/page\n    - gus: done #m/resolved\n\n[^m-b2]: gus: second #m/page\n');
+  t('page-stack: two page notes, independent status', two.annotations[0].status === 'resolved' && two.annotations[1].status === 'open');
+  t('page-stack: both are page notes, no lints', two.annotations.every((a) => a.page) && two.lints.length === 0);
+  const comment = '---\nx: 1\n---\n%% a leading\ncomment block %%\n\n# Title\n\n[^m-pg]: gus: page note here #m/page\n';
+  const fc = fix(comment);
+  t('page-orphan: leading %% block skipped', fc.includes('comment block %%\n\n[^m-pg]\n\n# Title'), JSON.stringify(fc));
+  const bare = '[^m-pg]\n\n[^m-pg]: gus: page note here #m/page\n';
+  t('page: fix is a no-op on a well-placed page note', fix(bare) === bare);
+}
+
+// --- page notes: flatten order, wadm shape, E5 round-trip -----------------
+{
+  const doc = 'A ==span==[^m-s1] here.\n\n[^m-s1]: gus: span note here #m/q\n\nA point.[^m-p1]\n\n[^m-p1]: gus: point note here\n\n[^m-pg]: gus (2026-09-01): page note here #m/page\n\n    Second paragraph of the page note.\n';
+  const withMarker = '[^m-pg]\n\n' + doc;
+  const m = parse(withMarker);
+  const pg = m.annotations.find((a) => a.label === 'm-pg');
+  t('page-e5: head body and continuation round-trip', pg.head.body === 'page note here #m/page' && pg.continuation.join('') === 'Second paragraph of the page note.', JSON.stringify(pg.continuation));
+  const fl = flatten(m);
+  const sec = fl.slice(fl.indexOf('## Marginalia'));
+  t('page-flatten: page note first, no quote or near line', sec.startsWith('## Marginalia\n\n> — gus (2026-09-01): page note here #m/page\n> Second paragraph of the page note.\n\n> span\n'), JSON.stringify(sec));
+  t('page-flatten: page note carries no near: line', !/near:.*page note/.test(sec));
+  t('page-flatten: ordinary point keeps near:', sec.includes('> near: A point.'));
+  const w = wadm(m, 'file:t.md');
+  const wp = w.find((a) => a.id === 'file:t.md#m-pg');
+  t('page-wadm: whole-resource target, no selector', JSON.stringify(wp.target) === '[{"source":"file:t.md"}]', JSON.stringify(wp.target));
+  t('page-wadm: continuation in body', wp.body[0].value === 'page note here #m/page\nSecond paragraph of the page note.');
+  const wo = wadm(parse(doc), 'file:t.md').find((a) => a.id === 'file:t.md#m-pg');
+  t('page-wadm: orphaned page keeps marginalia:orphan', wo.target['marginalia:orphan'] === true && !Array.isArray(wo.target));
+  t('page-strip: marker line leaves no debris', strip(m).startsWith('A ==span== here.\n\nA point.\n'), JSON.stringify(strip(m)));
+}
+
+// --- point annotations: stream offsets in wadm, near: cleanup --------------
+{
+  const m = parse('Intro ==hl==[^m-a] text.[^m-b]\n\n[^m-a]: gus: note a here\n\n[^m-b]: gus: note b here\n');
+  const sel = wadm(m).find((a) => a.id.endsWith('#m-b')).target[0].selector;
+  t('point-wadm: TextPositionSelector uses anchoring-stream offset', sel.type === 'TextPositionSelector' && sel.start === 14 && sel.end === 14, JSON.stringify(sel));
+  const m2 = parse('A ==x==[^m-a] here.\n\n[^m-a]: gus: note a here\n\nSecond para.[^m-b]\n\n[^m-b]: gus: note b here\n');
+  const sel2 = wadm(m2).find((a) => a.id.endsWith('#m-b')).target[0].selector;
+  t('point-wadm: definition blocks before the point are not counted', sel2.start === 'A x here.\n\n\nSecond para.'.length, JSON.stringify(sel2));
+  const m3 = parse('# ==Chapter== two and more[^m-n]\n\n[^m-n]: gus: note here text\n');
+  t('point-flatten: near: strips heading marks and fences', flatten(m3).includes('> near: Chapter two and more\n'), JSON.stringify(flatten(m3)));
+}
+
+// --- example corpora stay clean --------------------------------------------
+{
+  const rn = parse(readFileSync(new URL('./examples/reading-notes.md', import.meta.url), 'utf8'));
+  t('examples: reading-notes has no error/warn lints', rn.lints.every((l) => l.severity === 'info'), JSON.stringify(rn.lints));
+  t('examples: reading-notes has no page notes', rn.annotations.every((a) => !a.page));
+  const pn = parse(readFileSync(new URL('./examples/page-notes.md', import.meta.url), 'utf8'));
+  t('examples: page-notes is lint-clean', pn.lints.length === 0, JSON.stringify(pn.lints));
+  t('examples: page-notes has two page notes on the marker line', pn.annotations.filter((a) => a.page).length === 2 && pn.marker.present && pn.marker.line === 6);
+  t('examples: page-notes E5 continuation kept', pn.annotations.find((a) => a.label === 'm-pgq2').continuation.length === 1);
+}
+
+// --- marker line: an unterminated %% is body, not a skipped comment block ---
+{
+  const doc = '%%\nnever closes\n# T\n\n[^m-pg]: gus: x y #m/page\n';
+  const fixed = fix(doc);
+  t('marker: unterminated %% — fix inserts the marker before it',
+    fixed === '[^m-pg]\n\n%%\nnever closes\n# T\n\n[^m-pg]: gus: x y #m/page\n', JSON.stringify(fixed));
+  t('marker: fixed unterminated-%% doc is clean', parse(fixed).lints.length === 0, JSON.stringify(parse(fixed).lints));
+  t('marker: 4-space-indented ref line is not a marker (indented code)', !parse('    [^m-pg]\n\n[^m-pg]: gus: x y #m/page\n').marker.present);
 }
 
 console.log(failures ? `\n${failures} FAILURE(S)` : '\nall tests passed');
